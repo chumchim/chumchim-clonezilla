@@ -6,7 +6,7 @@ ISO_SRC="/mnt/c/Users/phanu/Downloads/clonezilla-live-3.2.2-5-amd64.iso"
 CUSTOM_MENU="/mnt/c/Users/phanu/source/repos/chumchim-clonezilla/scripts/custom-menu.sh"
 OUTPUT="/mnt/c/Images/chumchim-clonezilla.iso"
 
-echo "=== Building ChumChim-Clonezilla ISO ==="
+echo "=== Building ChumChim-Clonezilla v2.0 ISO ==="
 
 echo "[1/5] Extracting ISO..."
 rm -rf $WORK
@@ -24,6 +24,17 @@ echo "  OK"
 echo "[3/5] Injecting custom menu..."
 cp $CUSTOM_MENU $WORK/squashfs/usr/local/bin/school-menu
 chmod +x $WORK/squashfs/usr/local/bin/school-menu
+
+# Multicast server script
+MULTICAST_SCRIPT="$(dirname $CUSTOM_MENU)/multicast-server.sh"
+if [ -f "$MULTICAST_SCRIPT" ]; then
+    cp $MULTICAST_SCRIPT $WORK/squashfs/usr/local/bin/multicast-server.sh
+    chmod +x $WORK/squashfs/usr/local/bin/multicast-server.sh
+fi
+
+# Install multicast dependencies
+chroot $WORK/squashfs apt-get update -qq 2>/dev/null
+chroot $WORK/squashfs apt-get install -y -qq dnsmasq nfs-kernel-server pxelinux syslinux-common 2>/dev/null || true
 
 cat > $WORK/squashfs/etc/profile.d/99-school-menu.sh << 'EOF'
 if [ "$(tty)" = "/dev/tty1" ] && [ "$(whoami)" = "user" ]; then

@@ -1,7 +1,12 @@
 #!/bin/bash
 # ============================================
-#   ChumChim-Clonezilla v1.1
+#   ChumChim-Clonezilla v2.0
 # ============================================
+
+# Load multicast module
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$SCRIPT_DIR/multicast-server.sh" ] && source "$SCRIPT_DIR/multicast-server.sh"
+[ -f "/usr/local/bin/multicast-server.sh" ] && source "/usr/local/bin/multicast-server.sh"
 
 LOG_FILE="/tmp/chumchim.log"
 
@@ -106,7 +111,7 @@ show_splash() {
     echo "       ║  ╚██████╗██║  ██║╚██████╔╝      ║"
     echo "       ║   ╚═════╝╚═╝  ╚═╝ ╚═════╝       ║"
     echo "       ║                                  ║"
-    echo "       ║   ChumChim-Clonezilla v1.1       ║"
+    echo "       ║   ChumChim-Clonezilla v2.0       ║"
     echo "       ║   PC Clone & Deploy Tool         ║"
     echo "       ║                                  ║"
     echo "       ║   Based on Clonezilla             ║"
@@ -190,7 +195,7 @@ show_menu() {
     clear
     echo ""
     echo "  ============================================"
-    echo "    ChumChim-Clonezilla v1.1"
+    echo "    ChumChim-Clonezilla v2.0"
     echo "  ============================================"
     echo ""
     echo "  [1] Clone this PC       Save PC as image"
@@ -217,8 +222,11 @@ show_menu() {
     fi
 
     echo ""
-    echo "  [0] Shutdown"
     echo ""
+    echo "  [3] Deploy to many PCs  (Multicast via LAN)"
+    echo "      1 USB + LAN = deploy 30 PCs in 30 min"
+    echo ""
+    echo "  [0] Shutdown"
     echo "  [?] More options"
     echo ""
     read -p "  Select: " choice
@@ -633,6 +641,7 @@ while true; do
     show_menu
     case $choice in
         1) do_clone ;;
+        3) do_multicast 2>/dev/null || { echo "  Multicast not available"; read -p "  Press Enter..."; } ;;
         2)
             if [ $HAS_IMAGE -eq 0 ]; then
                 echo ""
