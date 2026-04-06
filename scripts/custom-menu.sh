@@ -10,6 +10,115 @@ log() {
     echo "  $1"
 }
 
+# ============================================
+# Auto-detect Windows disk
+# ============================================
+detect_windows_disk() {
+    WIN_DISK=""
+    for dev in /dev/sd*[0-9] /dev/nvme*p[0-9]; do
+        mkdir -p /tmp/_win 2>/dev/null
+        mount -o ro $dev /tmp/_win 2>/dev/null
+        if [ -d "/tmp/_win/Windows/System32" ]; then
+            WIN_DISK=$(echo $dev | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//' | sed 's|/dev/||')
+            umount /tmp/_win 2>/dev/null
+            return 0
+        fi
+        umount /tmp/_win 2>/dev/null
+    done
+    return 1
+}
+
+# ============================================
+# Verify image integrity
+# ============================================
+verify_image() {
+    IMG_DIR="$1"
+    echo "  Verifying image..."
+    if [ -f "$IMG_DIR/disk" ] && [ -f "$IMG_DIR/parts" ]; then
+        PARTS=$(cat "$IMG_DIR/parts")
+        ALL_OK=1
+        for part in $PARTS; do
+            FILES=$(ls "$IMG_DIR/" | grep "^${part}\." 2>/dev/null)
+            if [ -z "$FILES" ]; then
+                echo "  [X] Missing data for partition: $part"
+                ALL_OK=0
+            fi
+        done
+        if [ $ALL_OK -eq 1 ]; then
+            echo "  [OK] Image verified"
+            return 0
+        fi
+    else
+        echo "  [X] Image incomplete (missing disk/parts file)"
+    fi
+    return 1
+}
+
+# ============================================
+# Help
+# ============================================
+show_help() {
+    clear
+    echo ""
+    echo "  ============================================"
+    echo "    ChumChim-Clonezilla - Help"
+    echo "  ============================================"
+    echo ""
+    echo "  [1] Clone Image this PC"
+    echo "      Copy everything on this PC (Windows,"
+    echo "      programs, files) into an image file."
+    echo "      Save to USB HDD or flash drive."
+    echo "      The PC is NOT changed."
+    echo ""
+    echo "  [2] Install Image to PC"
+    echo "      Take an image file and install it"
+    echo "      to this PC. WARNING: this will ERASE"
+    echo "      everything on this PC and replace it"
+    echo "      with the image."
+    echo ""
+    echo "  [3] Manage Images"
+    echo "      View, rename, delete, or add notes"
+    echo "      to your saved images."
+    echo ""
+    echo "  Typical workflow:"
+    echo "    1. Install Windows + software on one PC"
+    echo "    2. Clone it [1]"
+    echo "    3. Install to other PCs [2]"
+    echo "    4. Done! All PCs have same software."
+    echo ""
+    read -p "  Press Enter to go back..."
+}
+
+# ============================================
+# Splash screen
+# ============================================
+show_splash() {
+    clear
+    echo ""
+    echo ""
+    echo ""
+    echo "       ╔══════════════════════════════════╗"
+    echo "       ║                                  ║"
+    echo "       ║   ██████╗██╗  ██╗██╗   ██╗      ║"
+    echo "       ║  ██╔════╝██║  ██║██║   ██║      ║"
+    echo "       ║  ██║     ███████║██║   ██║      ║"
+    echo "       ║  ██║     ██╔══██║██║   ██║      ║"
+    echo "       ║  ╚██████╗██║  ██║╚██████╔╝      ║"
+    echo "       ║   ╚═════╝╚═╝  ╚═╝ ╚═════╝       ║"
+    echo "       ║                                  ║"
+    echo "       ║   ChumChim-Clonezilla v1.1       ║"
+    echo "       ║   PC Clone & Deploy Tool         ║"
+    echo "       ║                                  ║"
+    echo "       ║   Based on Clonezilla             ║"
+    echo "       ║   github.com/chumchim             ║"
+    echo "       ║                                  ║"
+    echo "       ╚══════════════════════════════════╝"
+    echo ""
+    echo ""
+    echo "       Loading..."
+    sleep 3
+}
+
 # Find boot USB device (to exclude from target selection)
 BOOT_USB=""
 find_boot_usb() {
@@ -113,6 +222,7 @@ show_menu() {
     echo "  [3] Manage Images"
     echo "      View, rename, delete images"
     echo ""
+    echo "  [?] Help"
     echo "  [9] Command line"
     echo "  [0] Shutdown"
     echo ""
@@ -132,9 +242,17 @@ do_clone() {
     echo "" > $LOG_FILE
     log "Starting clone..."
 
+    # Auto-detect Windows disk
+    detect_windows_disk
     show_disks_safe
 
-    read -p "  Source disk to clone (e.g. sda): " SRC
+    if [ -n "$WIN_DISK" ]; then
+        echo "  >> Windows detected on: $WIN_DISK"
+        echo ""
+    fi
+
+    read -p "  Source disk to clone [$WIN_DISK]: " SRC
+    [ -z "$SRC" ] && SRC="$WIN_DISK"
     check_disk_exists "$SRC" || { read -p "  Press Enter..."; return; }
 
     # Source disk info
@@ -233,6 +351,10 @@ do_clone() {
     if [ $? -eq 0 ]; then
         SIZE=$(du -sh /home/partimag/$IMG_NAME 2>/dev/null | cut -f1)
         log "Clone complete: $IMG_NAME ($SIZE)"
+
+        # Verify image
+        verify_image "/home/partimag/$IMG_NAME"
+
         echo ""
         echo "  ============================================"
         echo "    CLONE COMPLETE!"
@@ -438,7 +560,9 @@ do_manage() {
 
     echo "  ============================================"
     echo "  [D] Delete an image"
+    echo "  [R] Rename an image"
     echo "  [N] Add/edit note"
+    echo "  [V] Verify an image"
     echo "  [B] Back to menu"
     echo ""
     read -p "  Select: " ACT
@@ -462,6 +586,32 @@ do_manage() {
                 echo "  Cancelled."
             fi
             ;;
+        r|R)
+            read -p "  Rename which image number? " RNUM
+            eval "RNAME=\$MGR_NAME_$RNUM"
+            eval "RDEV=\$MGR_DEV_$RNUM"
+            if [ -z "$RNAME" ]; then echo "  Invalid."; read -p "  Press Enter..."; return; fi
+            read -p "  New name: " NEWNAME
+            if [ -n "$NEWNAME" ]; then
+                mount $RDEV /tmp/_mgr 2>/dev/null
+                mv "/tmp/_mgr/$RNAME" "/tmp/_mgr/$NEWNAME"
+                # Rename note too
+                [ -f "/tmp/_mgr/.note_${RNAME}" ] && mv "/tmp/_mgr/.note_${RNAME}" "/tmp/_mgr/.note_${NEWNAME}"
+                umount /tmp/_mgr 2>/dev/null
+                echo "  [OK] Renamed: $RNAME -> $NEWNAME"
+            else
+                echo "  Cancelled."
+            fi
+            ;;
+        v|V)
+            read -p "  Verify which image number? " VNUM
+            eval "VNAME=\$MGR_NAME_$VNUM"
+            eval "VDEV=\$MGR_DEV_$VNUM"
+            if [ -z "$VNAME" ]; then echo "  Invalid."; read -p "  Press Enter..."; return; fi
+            mount $VDEV /tmp/_mgr 2>/dev/null
+            verify_image "/tmp/_mgr/$VNAME"
+            umount /tmp/_mgr 2>/dev/null
+            ;;
         n|N)
             read -p "  Add note to which image number? " NNUM
             eval "NNAME=\$MGR_NAME_$NNUM"
@@ -481,6 +631,9 @@ do_manage() {
 # Main Loop
 # ============================================
 
+# Show splash on first boot
+show_splash
+
 while true; do
     show_menu
     case $choice in
@@ -495,6 +648,7 @@ while true; do
             fi
             ;;
         3) do_manage ;;
+        "?"|h|H) show_help ;;
         9)
             echo "  Type 'exit' to return to menu"
             /bin/bash
