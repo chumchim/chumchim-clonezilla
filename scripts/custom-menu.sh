@@ -183,37 +183,73 @@ do_deploy() {
     echo "  ============================================"
     echo ""
 
-    # Find image
-    echo "  Looking for images..."
-    FOUND=0
+    # Scan all drives for images and build a list
+    echo "  Scanning for images..."
+    echo ""
+
+    IMG_COUNT=0
+    IMG_DEVS=""
+    IMG_PARTS=""
+    IMG_NAMES=""
+
     for dev in /dev/sd*[0-9] /dev/nvme*p[0-9]; do
         mkdir -p /tmp/_img 2>/dev/null
         mount $dev /tmp/_img 2>/dev/null
         if [ -d "/tmp/_img" ]; then
             for dir in /tmp/_img/*/; do
-                if [ -f "$dir/disk" ] || [ -f "$dir/parts" ]; then
-                    IMG=$(basename $dir)
-                    echo "    [$dev] $IMG"
-                    FOUND=1
+                if [ -f "${dir}disk" ] || [ -f "${dir}parts" ]; then
+                    IMG_COUNT=$((IMG_COUNT + 1))
+                    NAME=$(basename $dir)
+                    # Get size
+                    SIZE=$(du -sh "$dir" 2>/dev/null | cut -f1)
+                    echo "  [$IMG_COUNT] $NAME  ($SIZE)"
+
+                    # Store for later
+                    eval "IMG_DEV_$IMG_COUNT=$dev"
+                    eval "IMG_NAME_$IMG_COUNT=$NAME"
                 fi
             done
         fi
         umount /tmp/_img 2>/dev/null
     done
 
-    if [ $FOUND -eq 0 ]; then
+    if [ $IMG_COUNT -eq 0 ]; then
         echo "  No images found!"
-        echo "  Make sure USB with images is plugged in."
+        echo ""
+        echo "  Make sure USB/HDD with images is plugged in."
+        echo "  Clone a PC first with [1]."
         read -p "  Press Enter..."
         return
     fi
 
     echo ""
-    read -p "  Image source disk (e.g. sdb): " IMG_DISK
-    read -p "  Partition number (e.g. 1): " IMG_PART
-    read -p "  Image name: " IMG_NAME
+    echo "  -------------------------------------------"
+    read -p "  Select image number: " SEL
 
-    if [ -z "$IMG_DISK" ] || [ -z "$IMG_NAME" ]; then
+    if [ -z "$SEL" ] || [ "$SEL" -lt 1 ] || [ "$SEL" -gt $IMG_COUNT ] 2>/dev/null; then
+        echo "  Cancelled."
+        read -p "  Press Enter..."
+        return
+    fi
+
+    eval "IMG_DEV=\$IMG_DEV_$SEL"
+    eval "IMG_NAME=\$IMG_NAME_$SEL"
+
+    # Mount selected image source
+    mkdir -p /home/partimag
+    mount $IMG_DEV /home/partimag 2>/dev/null
+
+    if [ ! -d "/home/partimag/$IMG_NAME" ]; then
+        echo "  [X] Image not found: $IMG_NAME"
+        umount /home/partimag 2>/dev/null
+        read -p "  Press Enter..."
+        return
+    fi
+
+    echo ""
+    echo "  Selected: $IMG_NAME"
+
+    if [ -z "$IMG_NAME" ]; then
         echo "  Cancelled."
         read -p "  Press Enter..."
         return
