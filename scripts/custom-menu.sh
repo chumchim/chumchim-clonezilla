@@ -193,8 +193,7 @@ show_menu() {
     echo "    ChumChim-Clonezilla v1.1"
     echo "  ============================================"
     echo ""
-    echo "  [1] Clone Image this PC"
-    echo "      Save this PC as image file"
+    echo "  [1] Clone this PC       Save PC as image"
     echo ""
 
     # Check if any image exists
@@ -212,19 +211,15 @@ show_menu() {
     done
 
     if [ $HAS_IMAGE -eq 1 ]; then
-        echo "  [2] Install Image to PC"
-        echo "      Install image file to this PC"
+        echo "  [2] Install to PC       Install image to PC"
     else
-        echo "  [2] Install Image to PC  (no image found)"
+        echo "  [2] Install to PC       (no image yet)"
     fi
 
     echo ""
-    echo "  [3] Manage Images"
-    echo "      View, rename, delete images"
-    echo ""
-    echo "  [?] Help"
-    echo "  [9] Command line"
     echo "  [0] Shutdown"
+    echo ""
+    echo "  [?] More options"
     echo ""
     read -p "  Select: " choice
 }
@@ -647,8 +642,27 @@ while true; do
                 do_install
             fi
             ;;
+        "?"|h|H)
+            clear
+            echo ""
+            echo "  ============================================"
+            echo "    More Options"
+            echo "  ============================================"
+            echo ""
+            echo "  [3] Manage Images  (view, rename, delete)"
+            echo "  [4] Help"
+            echo "  [9] Command line"
+            echo "  [0] Back"
+            echo ""
+            read -p "  Select: " sub
+            case $sub in
+                3) do_manage ;;
+                4) show_help ;;
+                9) echo "  Type 'exit' to return"; /bin/bash ;;
+                *) ;;
+            esac
+            ;;
         3) do_manage ;;
-        "?"|h|H) show_help ;;
         9)
             echo "  Type 'exit' to return to menu"
             /bin/bash
