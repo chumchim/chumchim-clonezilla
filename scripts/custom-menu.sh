@@ -7,12 +7,34 @@ show_menu() {
     clear
     echo ""
     echo "  ============================================"
-    echo "    School Image Builder v1.0"
+    echo "    School Clone v1.0"
     echo "  ============================================"
     echo ""
-    echo "  [1] Capture this PC   (save as image file)"
-    echo "  [2] Deploy image      (install to this PC)"
-    echo "  [3] Network deploy    (deploy from server)"
+    echo "  [1] Clone Image this PC   (save PC as image file)"
+    echo ""
+
+    # Check if any image exists on any drive
+    HAS_IMAGE=0
+    for dev in /dev/sd*[0-9] /dev/nvme*p[0-9]; do
+        mkdir -p /tmp/_chk 2>/dev/null
+        mount $dev /tmp/_chk 2>/dev/null
+        if [ -d "/tmp/_chk" ]; then
+            for dir in /tmp/_chk/*/; do
+                if [ -f "${dir}disk" ] || [ -f "${dir}parts" ]; then
+                    HAS_IMAGE=1
+                    break 2
+                fi
+            done
+        fi
+        umount /tmp/_chk 2>/dev/null
+    done
+
+    if [ $HAS_IMAGE -eq 1 ]; then
+        echo "  [2] Install Image to PC   (install image to this PC)"
+    else
+        echo "  [2] Install Image to PC   (no image found)"
+    fi
+
     echo ""
     echo "  [9] Command line"
     echo "  [0] Shutdown"
@@ -52,7 +74,7 @@ do_capture() {
     clear
     echo ""
     echo "  ============================================"
-    echo "    CAPTURE THIS PC"
+    echo "    CLONE THIS PC"
     echo "  ============================================"
     echo ""
 
@@ -129,7 +151,7 @@ do_capture() {
     # Run Clonezilla capture
     echo ""
     echo "  ============================================"
-    echo "    CAPTURING... Please wait 10-30 minutes"
+    echo "    CLONING... Please wait 10-30 minutes"
     echo "    DO NOT turn off or unplug USB!"
     echo "  ============================================"
     echo ""
@@ -140,7 +162,7 @@ do_capture() {
         SIZE=$(du -sh /home/partimag/$IMG_NAME 2>/dev/null | cut -f1)
         echo ""
         echo "  ============================================"
-        echo "    CAPTURE COMPLETE!"
+        echo "    CLONE COMPLETE!"
         echo "    Image: $IMG_NAME ($SIZE)"
         echo "  ============================================"
     else
@@ -157,7 +179,7 @@ do_deploy() {
     clear
     echo ""
     echo "  ============================================"
-    echo "    DEPLOY IMAGE TO THIS PC"
+    echo "    INSTALL IMAGE TO THIS PC"
     echo "  ============================================"
     echo ""
 
@@ -231,7 +253,7 @@ do_deploy() {
     echo "    WARNING: /dev/$TGT will be ERASED!"
     echo "  ============================================"
     echo ""
-    read -p "  Deploy? (yes/no): " OK
+    read -p "  Install? (yes/no): " OK
 
     if [ "$OK" != "yes" ]; then
         umount /home/partimag 2>/dev/null
@@ -243,7 +265,7 @@ do_deploy() {
     # Run Clonezilla restore
     echo ""
     echo "  ============================================"
-    echo "    DEPLOYING... Please wait 10-30 minutes"
+    echo "    INSTALLING... Please wait 10-30 minutes"
     echo "    DO NOT turn off or unplug USB!"
     echo "  ============================================"
     echo ""
@@ -253,12 +275,12 @@ do_deploy() {
     if [ $? -eq 0 ]; then
         echo ""
         echo "  ============================================"
-        echo "    DEPLOY COMPLETE!"
+        echo "    INSTALL COMPLETE!"
         echo "    Remove USB and restart."
         echo "  ============================================"
     else
         echo ""
-        echo "  [X] Deploy failed!"
+        echo "  [X] Install failed!"
     fi
 
     umount /home/partimag 2>/dev/null
@@ -274,11 +296,14 @@ while true; do
     show_menu
     case $choice in
         1) do_capture ;;
-        2) do_deploy ;;
-        3)
-            echo ""
-            echo "  Network deploy - coming soon!"
-            read -p "  Press Enter..."
+        2)
+            if [ $HAS_IMAGE -eq 0 ]; then
+                echo ""
+                echo "  No image found. Clone a PC first [1]"
+                read -p "  Press Enter..."
+            else
+                do_deploy
+            fi
             ;;
         9)
             echo ""
