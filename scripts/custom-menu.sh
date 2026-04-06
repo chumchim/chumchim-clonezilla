@@ -139,35 +139,67 @@ find_boot_usb() {
     done
 }
 
+DISK_COUNT=0
+
 show_disks_safe() {
-    # Show disks but mark boot USB
+    # Show disks as numbered list, skip boot USB
     echo ""
     echo "  Available disks:"
     echo "  -----------------------------------------------"
-    lsblk -d -o NAME,SIZE,MODEL,TYPE | grep "disk" | while read line; do
-        DNAME=$(echo $line | awk '{print $1}')
-        if [ "/dev/$DNAME" = "$BOOT_USB" ]; then
-            echo "    $line  << USB BOOT (do not select!)"
-        else
-            echo "    $line"
+    DISK_COUNT=0
+    for dname in $(lsblk -d -o NAME,TYPE | grep "disk" | awk '{print $1}'); do
+        # Skip boot USB
+        if [ "/dev/$dname" = "$BOOT_USB" ]; then
+            continue
         fi
+        DISK_COUNT=$((DISK_COUNT + 1))
+        DSIZE=$(lsblk -d -o SIZE /dev/$dname 2>/dev/null | tail -1)
+        DMODEL=$(lsblk -d -o MODEL /dev/$dname 2>/dev/null | tail -1)
+        echo "  [$DISK_COUNT] $dname  $DSIZE  $DMODEL"
+        eval "DISK_NAME_$DISK_COUNT=$dname"
     done
     echo "  -----------------------------------------------"
     echo ""
 }
 
-check_disk_exists() {
-    if [ ! -b "/dev/$1" ]; then
-        echo "  [X] Disk /dev/$1 not found!"
+select_disk() {
+    # Returns selected disk name in SEL_DISK variable
+    SEL_DISK=""
+    read -p "  Select disk number: " DNUM
+    if [ -z "$DNUM" ] || [ "$DNUM" -lt 1 ] || [ "$DNUM" -gt $DISK_COUNT ] 2>/dev/null; then
+        echo "  [X] Invalid selection"
         return 1
     fi
-    # Prevent selecting boot USB
-    DNAME=$(echo "/dev/$1" | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
-    if [ "$DNAME" = "$BOOT_USB" ]; then
-        echo "  [X] That is the boot USB! Do not select it!"
-        return 1
-    fi
+    eval "SEL_DISK=\$DISK_NAME_$DNUM"
     return 0
+}
+
+select_partition() {
+    # Show partitions on selected disk and let user pick
+    # Returns partition device in SEL_PART variable
+    DISK=$1
+    SEL_PART=""
+    echo ""
+    echo "  Partitions on $DISK:"
+    PART_COUNT=0
+    for pname in $(lsblk -o NAME,SIZE,FSTYPE /dev/$DISK 2>/dev/null | tail -n +2 | awk '{print $1}' | sed 's/[├└│─]//g' | grep -v "^$"); do
+        PART_COUNT=$((PART_COUNT + 1))
+        PSIZE=$(lsblk -o SIZE /dev/$pname 2>/dev/null | tail -1)
+        PFS=$(lsblk -o FSTYPE /dev/$pname 2>/dev/null | tail -1)
+        echo "  [$PART_COUNT] $pname  $PSIZE  $PFS"
+        eval "PART_NAME_$PART_COUNT=$pname"
+    done
+
+    if [ $PART_COUNT -eq 1 ]; then
+        eval "SEL_PART=\$PART_NAME_1"
+        echo "  Auto-selected: $SEL_PART"
+        return 0
+    fi
+
+    read -p "  Select partition number: " PNUM
+    eval "SEL_PART=\$PART_NAME_$PNUM"
+    [ -n "$SEL_PART" ] && return 0
+    return 1
 }
 
 check_disk_space() {
@@ -247,6 +279,8 @@ do_clone() {
 
     # Auto-detect Windows disk
     detect_windows_disk
+
+    echo "  Select source disk to clone:"
     show_disks_safe
 
     if [ -n "$WIN_DISK" ]; then
@@ -254,35 +288,29 @@ do_clone() {
         echo ""
     fi
 
-    read -p "  Source disk to clone [$WIN_DISK]: " SRC
-    [ -z "$SRC" ] && SRC="$WIN_DISK"
-    check_disk_exists "$SRC" || { read -p "  Press Enter..."; return; }
+    select_disk || { read -p "  Press Enter..."; return; }
+    SRC=$SEL_DISK
 
-    # Source disk info
     SRC_SIZE=$(lsblk -d -o SIZE /dev/$SRC 2>/dev/null | tail -1)
     SRC_MODEL=$(lsblk -d -o MODEL /dev/$SRC 2>/dev/null | tail -1)
     echo "  Source: /dev/$SRC ($SRC_SIZE) $SRC_MODEL"
 
     echo ""
-    echo "  Save image to which disk?"
+    echo "  Select disk to SAVE image:"
     show_disks_safe
-    read -p "  Save to disk (e.g. sdb): " SAVE
-    check_disk_exists "$SAVE" || { read -p "  Press Enter..."; return; }
-    read -p "  Partition number (e.g. 1): " PART
+    select_disk || { read -p "  Press Enter..."; return; }
+    SAVE=$SEL_DISK
 
-    SAVE_DEV="/dev/${SAVE}${PART}"
+    select_partition "$SAVE" || { read -p "  Press Enter..."; return; }
+
+    SAVE_DEV="/dev/$SEL_PART"
     mkdir -p /home/partimag
     mount $SAVE_DEV /home/partimag 2>/dev/null
     if [ $? -ne 0 ]; then
-        SAVE_DEV="/dev/${SAVE}p${PART}"
-        mount $SAVE_DEV /home/partimag 2>/dev/null
-        if [ $? -ne 0 ]; then
-            echo "  [X] Cannot mount $SAVE_DEV"
-            read -p "  Press Enter..."; return
-        fi
+        echo "  [X] Cannot mount $SAVE_DEV"
+        read -p "  Press Enter..."; return
     fi
 
-    # Check free space on save location
     SAVE_FREE=$(df -BG /home/partimag 2>/dev/null | tail -1 | awk '{print $4}')
     echo "  Save disk free space: $SAVE_FREE"
 
@@ -443,15 +471,10 @@ do_install() {
 
     # Select target
     echo ""
-    echo "  Target disk (will be ERASED!):"
+    echo "  Select TARGET disk (will be ERASED!):"
     show_disks_safe
-
-    read -p "  Target disk (e.g. sda): " TGT
-
-    check_disk_exists "$TGT" || {
-        umount /home/partimag 2>/dev/null
-        read -p "  Press Enter..."; return
-    }
+    select_disk || { umount /home/partimag 2>/dev/null; read -p "  Press Enter..."; return; }
+    TGT=$SEL_DISK
 
     # Check disk health (basic)
     HEALTH=$(smartctl -H /dev/$TGT 2>/dev/null | grep -i "result" | awk '{print $NF}')
