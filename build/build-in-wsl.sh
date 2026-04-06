@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-WORK="/tmp/school-clone-build"
+WORK="/tmp/chumchim-build"
 ISO_SRC="/mnt/c/Users/phanu/Downloads/clonezilla-live-3.2.2-5-amd64.iso"
-CUSTOM_MENU="/mnt/c/Users/phanu/source/repos/school-clonezilla/scripts/custom-menu.sh"
-OUTPUT="/mnt/c/Images/school-clonezilla.iso"
+CUSTOM_MENU="/mnt/c/Users/phanu/source/repos/chumchim-clonezilla/scripts/custom-menu.sh"
+OUTPUT="/mnt/c/Images/chumchim-clonezilla.iso"
 
-echo "=== Building School Clonezilla ISO ==="
+echo "=== Building ChumChim-Clonezilla ISO ==="
 
 echo "[1/5] Extracting ISO..."
 rm -rf $WORK
@@ -38,7 +38,7 @@ cat > $WORK/iso/boot/grub/grub.cfg << 'EOF'
 set default="0"
 set timeout="5"
 
-menuentry "School Image Builder" {
+menuentry "ChumChim-Clonezilla" {
   linux /live/vmlinuz boot=live components quiet username=user locales=en_US.UTF-8 keyboard-layouts=us
   initrd /live/initrd.img
 }
@@ -54,7 +54,7 @@ DEFAULT school
 TIMEOUT 50
 
 LABEL school
-  MENU LABEL School Image Builder
+  MENU LABEL ChumChim-Clonezilla
   kernel /live/vmlinuz
   append initrd=/live/initrd.img boot=live components quiet username=user locales=en_US.UTF-8 keyboard-layouts=us
 
@@ -74,7 +74,7 @@ rm -f $OUTPUT
 xorriso -as mkisofs \
     -iso-level 3 \
     -full-iso9660-filenames \
-    -volid "SchoolClone" \
+    -volid "ChumChimClone" \
     -eltorito-boot syslinux/isolinux.bin \
     -eltorito-catalog syslinux/boot.cat \
     -no-emul-boot \

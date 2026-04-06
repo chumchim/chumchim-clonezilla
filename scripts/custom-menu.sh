@@ -7,7 +7,7 @@ show_menu() {
     clear
     echo ""
     echo "  ============================================"
-    echo "    School Clone v1.0"
+    echo "    ChumChim-Clonezilla v1.0"
     echo "  ============================================"
     echo ""
     echo "  [1] Clone Image this PC   (save PC as image file)"

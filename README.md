@@ -1,75 +1,66 @@
-# School Clonezilla
+# ChumChim-Clonezilla
 
-Custom Clonezilla for school PC deployment.
-Boot from USB → [1] Capture or [2] Deploy → Done!
+Custom Clonezilla for easy PC cloning.
+Boot from USB → Clone or Install → Done!
 
-Based on [Clonezilla](https://clonezilla.org/) (GPL open source).
-
-
-## Goal
-
-Make PC cloning so easy that any teacher can do it:
-- Boot USB
-- Select [1] or [2]
-- Wait
-- Done
-
-No Sysprep, no PowerShell, no commands to type.
+Based on [Clonezilla](https://clonezilla.org/) (GPL v2 open source).
 
 
-## Features (Planned)
+## What it does
 
-- [x] Simple menu: Capture / Deploy
-- [ ] Thai + English interface
-- [ ] Auto-detect disks
-- [ ] Progress bar
-- [ ] Built-in Windows debloat (optional)
-- [ ] UEFI + Legacy support
-- [ ] Custom branding
+```
+Clone:    Copy a PC to an image file
+Install:  Install image file to another PC
 
-
-## Development Plan
-
-### Phase 1: Build custom Clonezilla ISO
-- Download Clonezilla Live
-- Remaster ISO with custom scripts
-- Test boot in VM
-
-### Phase 2: Simplify menu
-- Remove all options except Capture/Deploy
-- Auto-detect source/target disks
-- Clear progress display
-
-### Phase 3: Thai language
-- Translate menu to Thai
-- Bilingual support
-
-### Phase 4: Extra features
-- Windows debloat after deploy
-- Network deploy support
-- Multiple image management
-
-### Phase 5: Testing
-- Test on school hardware
-- Different PC brands
-- UEFI + Legacy
+One USB does everything.
+```
 
 
-## Tech Stack
+## How to use
 
-- Clonezilla Live (Debian-based)
-- Partclone (clone engine)
-- Bash scripting
-- Dialog/Whiptail (TUI)
+### Make USB (once)
+1. Download `chumchim-clonezilla.iso`
+2. Use [Rufus](https://rufus.ie) to write ISO to USB
+3. Done!
+
+### Clone a PC
+1. Install Windows + software on one PC (normally)
+2. Shut down
+3. Plug USB → Boot (F12) → Select **[1] Clone Image this PC**
+4. Follow prompts → Wait 10-30 min → Image saved!
+
+### Install to other PCs
+1. Plug USB → Boot (F12) → Select **[2] Install Image to PC**
+2. Select image → Select disk → Wait 10-30 min
+3. Remove USB → Reboot → PC ready with all software!
 
 
-## Build
+## Features
+
+- Simple menu: Clone / Install
+- No Sysprep needed
+- No commands to type
+- UEFI + Legacy boot
+- Based on Clonezilla (stable, tested 15+ years)
+
+
+## Build from source
+
+Requires WSL (Ubuntu):
 
 ```bash
-# TODO: Build instructions
+wsl -d Ubuntu -u root -- bash build/build-in-wsl.sh
 ```
+
+Output: `C:\Images\chumchim-clonezilla.iso`
 
 
 ## License
 
 GPL v2 (same as Clonezilla)
+
+
+## Credits
+
+- [Clonezilla](https://clonezilla.org/) by Steven Shiau
+- ChumChim-Clonezilla by [@chumchim](https://github.com/chumchim)
