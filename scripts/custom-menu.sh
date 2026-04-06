@@ -197,6 +197,19 @@ do_clone() {
     echo "    Note:    ${IMG_NOTE:-none}"
     echo "  ============================================"
     echo ""
+    echo ""
+    echo "  Speed:"
+    echo "  [1] Fast   (larger file, faster clone)"
+    echo "  [2] Normal (balanced)"
+    echo "  [3] Small  (smaller file, slower clone)"
+    read -p "  Select (1/2/3): " SPEED
+    case $SPEED in
+        1) COMPRESS="-z0"; SPEED_TXT="Fast" ;;
+        3) COMPRESS="-z5p"; SPEED_TXT="Small" ;;
+        *) COMPRESS="-z1p"; SPEED_TXT="Normal" ;;
+    esac
+
+    echo ""
     read -p "  Start clone? (yes/no): " OK
 
     if [ "$OK" != "yes" ]; then
@@ -215,7 +228,7 @@ do_clone() {
     echo "  ============================================"
     echo ""
 
-    /usr/sbin/ocs-sr -q2 -c -j2 -z5p -i 4096 -sfsck -senc -p true savedisk "$IMG_NAME" "$SRC" 2>&1 | tee -a $LOG_FILE
+    /usr/sbin/ocs-sr -q2 -c -j2 $COMPRESS -i 16777216 -sfsck -senc -p true savedisk "$IMG_NAME" "$SRC" 2>&1 | tee -a $LOG_FILE
 
     if [ $? -eq 0 ]; then
         SIZE=$(du -sh /home/partimag/$IMG_NAME 2>/dev/null | cut -f1)
