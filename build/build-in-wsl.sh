@@ -32,13 +32,31 @@ if [ -f "$MULTICAST_SCRIPT" ]; then
     chmod +x $WORK/squashfs/usr/local/bin/multicast-server.sh
 fi
 
-# Install multicast dependencies
+# Web UI
+WEBAPP_DIR="$(dirname $CUSTOM_MENU)/../webapp"
+if [ -d "$WEBAPP_DIR" ]; then
+    mkdir -p $WORK/squashfs/opt/chumchim
+    cp -r $WEBAPP_DIR/* $WORK/squashfs/opt/chumchim/
+    chmod +x $WORK/squashfs/opt/chumchim/server.py
+fi
+
+# Install dependencies
 chroot $WORK/squashfs apt-get update -qq 2>/dev/null
-chroot $WORK/squashfs apt-get install -y -qq dnsmasq nfs-kernel-server pxelinux syslinux-common 2>/dev/null || true
+chroot $WORK/squashfs apt-get install -y -qq python3 chromium-browser xinit x11-xserver-utils openbox dnsmasq nfs-kernel-server pxelinux syslinux-common 2>/dev/null || true
 
 cat > $WORK/squashfs/etc/profile.d/99-school-menu.sh << 'EOF'
 if [ "$(tty)" = "/dev/tty1" ] && [ "$(whoami)" = "user" ]; then
-    /usr/local/bin/school-menu
+    # Try Web UI first, fallback to dialog
+    if command -v chromium-browser >/dev/null 2>&1 && command -v xinit >/dev/null 2>&1; then
+        # Start web server
+        python3 /opt/chumchim/server.py &
+        sleep 2
+        # Start X11 + Chromium in kiosk mode
+        xinit /usr/bin/chromium-browser --no-sandbox --kiosk --disable-gpu --disable-software-rasterizer http://localhost:8080 -- :0 2>/dev/null
+    else
+        # Fallback to dialog menu
+        /usr/local/bin/school-menu
+    fi
 fi
 EOF
 chmod +x $WORK/squashfs/etc/profile.d/99-school-menu.sh
