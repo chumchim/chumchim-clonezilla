@@ -479,7 +479,7 @@ do_manage() {
                 local DST_DEV="" DST_FREE=0
                 for dev in /dev/sd*[0-9]* /dev/nvme*p[0-9]*; do
                     [ -b "$dev" ] || continue
-                    [ "$ev" = "$SRC_IMG_DEV" ] && continue
+                    [ "$dev" = "$SRC_IMG_DEV" ] && continue
                     local FS=$(blkid -o value -s TYPE "$dev" 2>/dev/null)
                     [ "$FS" = "iso9660" ] && continue
                     [ "$FS" = "squashfs" ] && continue

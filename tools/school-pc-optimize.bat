@@ -250,9 +250,7 @@ echo.
 
 echo [10/10] Zero-filling free space...
 echo   This makes clone image MUCH smaller.
-powershell -Command "$free=[math]::Round((Get-PSDrive C).Free/1GB);$est=[math]::Round($free/3);Write-Host \"  Free space: ${free}GB — estimated time: ~${est} minutes\""
-echo   Working...
-powershell -Command "$sw=[System.Diagnostics.Stopwatch]::StartNew();$f=[System.IO.File]::Create('C:\zero.tmp');$b=New-Object byte[] (256MB);$total=0;while($true){try{$f.Write($b,0,$b.Length);$total+=$b.Length;if($total%%1073741824 -eq 0){$gb=$total/1GB;$sec=$sw.Elapsed.TotalSeconds;$speed=[math]::Round($gb/$sec*1024);Write-Host \"  ${gb}GB written (${speed}MB/s)\"}}catch{break}};$f.Close();$sec=$sw.Elapsed.TotalSeconds;Write-Host \"  Total: $([math]::Round($total/1GB))GB in $([math]::Round($sec))s\"" 2>nul
+powershell -ExecutionPolicy Bypass -File "%~dp0zero-fill.ps1" 2>nul
 del /f /q C:\zero.tmp 2>nul
 echo   Done!
 

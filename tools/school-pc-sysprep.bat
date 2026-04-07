@@ -36,10 +36,10 @@ if %errorlevel% neq 0 (
 echo.
 echo [1/3] Preparing Sysprep...
 
-:: Remove ALL AppX packages that block Sysprep
+:: Remove AppX packages that commonly block Sysprep (targeted, safe)
 echo   Removing AppX packages that block Sysprep...
-powershell -Command "Get-AppxPackage -AllUsers | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue" 2>nul
-powershell -Command "Get-AppxProvisionedPackage -Online | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue" 2>nul
+powershell -Command "Get-AppxPackage -AllUsers | Where-Object {$_.Name -match 'Cortana|YourPhone|FeedbackHub|549981C3F5F10|WindowsCommunicationsApps|MicrosoftEdge|BingWeather|BingNews|CandyCrush|Disney|Xbox|GamingApp|Solitaire|Clipchamp|Teams|Todos|Maps|GetHelp|Getstarted|Paint3D|3DBuilder|3DViewer|People|Skype'} | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue" 2>nul
+powershell -Command "Get-AppxProvisionedPackage -Online | Where-Object {$_.DisplayName -match 'Cortana|YourPhone|FeedbackHub|549981C3F5F10|WindowsCommunicationsApps|BingWeather|BingNews|CandyCrush|Disney|Xbox|GamingApp|Solitaire|Clipchamp|Teams|Todos|Maps|GetHelp|Getstarted|Paint3D|3DBuilder|3DViewer|People|Skype'} | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue" 2>nul
 
 :: Disable AppX Sysprep generalize check
 echo   Disabling AppX Sysprep checks...
