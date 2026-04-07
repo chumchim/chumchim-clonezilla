@@ -50,13 +50,20 @@ lan_get_ip() {
         fi
     done
 
-    # No DHCP — assign static fallback
+    # No DHCP — assign static fallback (random last octet to avoid collision)
+    local ROLE="${1:-client}"
+    local LAST_OCTET=1
+    if [ "$ROLE" = "server" ]; then
+        LAST_OCTET=1
+    else
+        LAST_OCTET=$((RANDOM % 200 + 10))
+    fi
     for iface in $(ls /sys/class/net/ | grep -v lo); do
         ip link set "$iface" up 2>/dev/null
-        ip addr add 192.168.77.1/24 dev "$iface" 2>/dev/null
+        ip addr add 192.168.77.${LAST_OCTET}/24 dev "$iface" 2>/dev/null
         LAN_IF="$iface"
-        LAN_IP="192.168.77.1"
-        lan_log "No DHCP, assigned static $LAN_IP on $iface"
+        LAN_IP="192.168.77.${LAST_OCTET}"
+        lan_log "No DHCP, assigned static $LAN_IP on $iface ($ROLE)"
         return 0
     done
 
@@ -179,11 +186,15 @@ lan_start_beacon() {
     # Kill any existing beacon
     lan_stop_beacon
 
+    # Get subnet broadcast address
+    local BCAST=$(ip -4 addr show "$LAN_IF" 2>/dev/null | grep "brd " | awk '{print $4}' | head -1)
+    [ -z "$BCAST" ] && BCAST="192.168.77.255"
+
     # Broadcast every 2 seconds in background
     (
         while true; do
-            echo "${LAN_MAGIC}|${ip}" | socat - UDP-DATAGRAM:255.255.255.255:${LAN_PORT},broadcast 2>/dev/null \
-                || echo "${LAN_MAGIC}|${ip}" > /dev/udp/255.255.255.255/${LAN_PORT} 2>/dev/null \
+            echo "${LAN_MAGIC}|${ip}" | socat - UDP-DATAGRAM:${BCAST}:${LAN_PORT},broadcast,so-broadcast 2>/dev/null \
+                || echo -n "${LAN_MAGIC}|${ip}" | nc -u -b -w1 ${BCAST} ${LAN_PORT} 2>/dev/null \
                 || true
             sleep 2
         done
@@ -234,20 +245,22 @@ lan_discover_server() {
 lan_start_nfs_server() {
     local export_path="$1"
 
-    # Configure exports
-    echo "${export_path} *(rw,sync,no_subtree_check,no_root_squash,insecure)" > /etc/exports
+    # NFS can only export real filesystems (not tmpfs/squashfs)
+    # Verify the path is on a real mount
+    local fs_type=$(df -T "$export_path" 2>/dev/null | tail -1 | awk '{print $2}')
+    lan_log "NFS export path $export_path is on filesystem: $fs_type"
+
+    # Configure exports with fsid for non-root filesystems
+    echo "${export_path} *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=1)" > /etc/exports
 
     # Start NFS services
     rpcbind 2>/dev/null || true
     rpc.statd 2>/dev/null || true
-    exportfs -ra 2>/dev/null
 
-    # Try systemd first, then direct daemon start
-    service nfs-kernel-server start 2>/dev/null \
-        || systemctl start nfs-server 2>/dev/null \
-        || rpc.nfsd 8 2>/dev/null
-
+    # Start nfsd
+    rpc.nfsd 8 2>/dev/null
     rpc.mountd 2>/dev/null || true
+    exportfs -ra 2>/dev/null
 
     # Verify
     if exportfs -v 2>/dev/null | grep -q "$export_path"; then
@@ -318,39 +331,35 @@ WARNING: The largest disk may be\n\
 formatted if no ext4 partition exists!" 16 55
     [ $? -ne 0 ] && return
 
-    # Step 1: Detect disk
-    dialog --infobox "\n  [1/4] Detecting storage..." 5 40
+    # Step 1: Network first (need IP for beacon)
+    dialog --infobox "\n  [1/4] Setting up network..." 5 40
+    lan_get_ip server
+    if [ $? -ne 0 ]; then
+        dialog --msgbox "No network interface found!\n\nConnect a LAN cable." 8 45
+        return
+    fi
+
+    # Step 2: Detect disk
+    dialog --infobox "\n  [2/4] Detecting storage..." 5 40
     lan_detect_largest_disk
     if [ $? -ne 0 ]; then
         dialog --msgbox "No internal disk found!\n\nConnect an internal HDD/SSD." 8 45
         return
     fi
 
-    local disk_size
     disk_size=$(lsblk -d -o SIZE "$LAN_DISK_DEV" 2>/dev/null | tail -1 | tr -d ' ')
-    local disk_model
     disk_model=$(lsblk -d -o MODEL "$LAN_DISK_DEV" 2>/dev/null | tail -1)
     lan_log "Detected disk: $LAN_DISK_DEV ($disk_size) $disk_model"
 
-    # Step 2: Prepare storage
-    dialog --infobox "\n  [2/4] Preparing storage on $LAN_DISK_DEV..." 5 55
+    # Step 3: Prepare storage
+    dialog --infobox "\n  [3/4] Preparing storage on $LAN_DISK_DEV..." 5 55
     lan_prepare_storage "$LAN_DISK" "$LAN_NFS_PATH"
     if [ $? -ne 0 ]; then
         dialog --msgbox "Cannot prepare storage on $LAN_DISK_DEV!\n\nTry a different disk." 8 50
         return
     fi
 
-    local storage_free
     storage_free=$(df -h "$LAN_NFS_PATH" 2>/dev/null | tail -1 | awk '{print $4}')
-
-    # Step 3: Network
-    dialog --infobox "\n  [3/4] Setting up network..." 5 40
-    lan_get_ip
-    if [ $? -ne 0 ]; then
-        dialog --msgbox "No network interface found!\n\nConnect a LAN cable." 8 45
-        umount "$LAN_NFS_PATH" 2>/dev/null
-        return
-    fi
 
     # Step 4: Start NFS + beacon
     dialog --infobox "\n  [4/4] Starting NFS server..." 5 40
@@ -454,6 +463,12 @@ lan_server_dashboard() {
 lan_try_nfs_for_clone() {
     LAN_CONNECTED=0
 
+    # Ensure network is up
+    if [ -z "$LAN_IP" ]; then
+        lan_get_ip client
+    fi
+    [ -z "$LAN_IP" ] && return 1
+
     # Quick UDP discovery (3 seconds)
     lan_discover_server 3
     if [ $? -ne 0 ]; then
@@ -483,6 +498,12 @@ lan_try_nfs_for_clone() {
 
 lan_try_nfs_for_install() {
     LAN_CONNECTED=0
+
+    # Ensure network is up
+    if [ -z "$LAN_IP" ]; then
+        lan_get_ip client
+    fi
+    [ -z "$LAN_IP" ] && return 1
 
     # Quick UDP discovery (3 seconds)
     lan_discover_server 3

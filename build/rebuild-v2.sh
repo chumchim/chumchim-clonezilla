@@ -11,16 +11,30 @@ echo "=== Building ChumChim v3.0 ==="
 rm -rf $WORK
 mkdir -p $WORK/iso $WORK/squashfs /mnt/cdrom
 
-echo "[1/5] Extracting ISO..."
+echo "[1/7] Extracting ISO..."
 mount -o loop $ISO_SRC /mnt/cdrom
 cp -a /mnt/cdrom/* $WORK/iso/
 cp -a /mnt/cdrom/.disk $WORK/iso/ 2>/dev/null || true
 umount /mnt/cdrom
 
-echo "[2/5] Extracting squashfs..."
+echo "[2/7] Extracting squashfs..."
 unsquashfs -d $WORK/squashfs $WORK/iso/live/filesystem.squashfs > /dev/null 2>&1
 
-echo "[3/5] Injecting scripts..."
+echo "[3/7] Installing LAN packages..."
+mount --bind /dev $WORK/squashfs/dev
+mount --bind /proc $WORK/squashfs/proc
+mount --bind /sys $WORK/squashfs/sys
+cp /etc/resolv.conf $WORK/squashfs/etc/resolv.conf
+chroot $WORK/squashfs bash -c "
+apt-get update -qq 2>/dev/null
+apt-get install -y -qq socat nfs-kernel-server openssh-server 2>/dev/null
+" 2>&1 | tail -3
+umount $WORK/squashfs/sys
+umount $WORK/squashfs/proc
+umount $WORK/squashfs/dev
+echo "  OK"
+
+echo "[4/7] Injecting scripts..."
 cp $SCRIPTS/custom-menu.sh $WORK/squashfs/usr/local/bin/school-menu
 chmod +x $WORK/squashfs/usr/local/bin/school-menu
 cp $SCRIPTS/multicast-server.sh $WORK/squashfs/usr/local/bin/ 2>/dev/null || true
@@ -112,6 +126,38 @@ fi
 PARTEOF
 chmod +x $WORK/squashfs/usr/local/bin/auto-partition.sh
 
+# Enable SSH + network on boot (via rc.local, runs as root before login)
+cat > $WORK/squashfs/etc/rc.local << 'RCEOF'
+#!/bin/bash
+# Bring up all network interfaces
+for iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+    ip link set "$iface" up 2>/dev/null
+    dhclient -timeout 5 "$iface" 2>/dev/null
+done
+# If no DHCP, assign static
+HAS_IP=$(ip -4 addr show | grep "inet " | grep -v "127.0.0.1" | head -1)
+if [ -z "$HAS_IP" ]; then
+    # Random IP to avoid collision between VMs
+    RANDOM_OCTET=$(( ($(date +%N) % 200) + 10 ))
+    for iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
+        ip addr add 192.168.77.${RANDOM_OCTET}/24 dev "$iface" 2>/dev/null
+        break
+    done
+fi
+# Start SSH
+mkdir -p /var/run/sshd 2>/dev/null
+echo "root:chumchim" | chpasswd 2>/dev/null
+sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config 2>/dev/null
+sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null
+sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null
+echo "PermitRootLogin yes" >> /etc/ssh/sshd_config 2>/dev/null
+echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config 2>/dev/null
+ssh-keygen -A 2>/dev/null
+/usr/sbin/sshd 2>/dev/null
+exit 0
+RCEOF
+chmod +x $WORK/squashfs/etc/rc.local
+
 # Auto-start ChumChim menu (with auto-partition first)
 cat > $WORK/squashfs/etc/profile.d/99-chumchim.sh << 'EOF'
 if [ "$(tty)" = "/dev/tty1" ] && [ "$(whoami)" = "user" ]; then
@@ -122,7 +168,7 @@ fi
 EOF
 chmod +x $WORK/squashfs/etc/profile.d/99-chumchim.sh
 
-echo "[4/5] Modifying boot config..."
+echo "[5/7] Modifying boot config..."
 # GRUB (UEFI)
 cat > $WORK/iso/boot/grub/grub.cfg << 'EOF'
 search --no-floppy --label --set=root ChumChimV3
@@ -162,7 +208,7 @@ LABEL ChumChim-text
 EOF
 cp $WORK/iso/syslinux/syslinux.cfg $WORK/iso/syslinux/isolinux.cfg
 
-echo "[5/6] Adding docs + tools to ISO root..."
+echo "[6/7] Adding docs + tools to ISO root..."
 DOCS=/mnt/c/Users/phanu/source/repos/chumchim-clonezilla/docs
 TOOLS=/mnt/c/Users/phanu/source/repos/chumchim-clonezilla/tools
 cp $DOCS/*.txt $WORK/iso/ 2>/dev/null || true
@@ -170,7 +216,7 @@ mkdir -p $WORK/iso/tools
 cp $TOOLS/*.bat $WORK/iso/tools/ 2>/dev/null || true
 echo "  OK"
 
-echo "[6/6] Repacking ISO..."
+echo "[7/7] Repacking ISO..."
 rm $WORK/iso/live/filesystem.squashfs
 mksquashfs $WORK/squashfs $WORK/iso/live/filesystem.squashfs -comp zstd -Xcompression-level 3 -quiet
 
