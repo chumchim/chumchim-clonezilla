@@ -455,7 +455,7 @@ do_clone() {
     echo ""
     log "Clone /dev/$SRC -> $IMG_NAME ($PART_COUNT partitions)"
 
-    /usr/sbin/ocs-sr -q2 -c -j2 $COMPRESS -i 16777216 -sfsck -senc -p true savedisk "$IMG_NAME" "$SRC" 2>&1 | tee -a "$LOG_FILE"
+    /usr/sbin/ocs-sr -q2 -batch -nogui -j2 $COMPRESS -i 67108864 -sfsck -senc -p true savedisk "$IMG_NAME" "$SRC" 2>&1 | tee -a "$LOG_FILE"
     OCS_RC=${PIPESTATUS[0]}
 
     if [ $OCS_RC -eq 0 ]; then
@@ -586,7 +586,7 @@ do_install() {
     echo ""
     log "Install $IMG_NAME -> /dev/$TGT ($PART_COUNT partitions)"
 
-    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -j2 -c -p true restoredisk "$IMG_NAME" "$TGT" 2>&1 | tee -a "$LOG_FILE"
+    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -batch -nogui -j2 -p true restoredisk "$IMG_NAME" "$TGT" 2>&1 | tee -a "$LOG_FILE"
     OCS_RC=${PIPESTATUS[0]}
 
     if [ $OCS_RC -eq 0 ]; then
