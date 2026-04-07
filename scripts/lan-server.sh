@@ -464,21 +464,46 @@ do_lan_server() {
     # Step 3: Prepare storage
     echo "  [3/5] Preparing storage..."
     mkdir -p "$LAN_NFS_PATH"
+    # Enable FUSE allow_other for NFS+NTFS
+    grep -q "user_allow_other" /etc/fuse.conf 2>/dev/null || echo "user_allow_other" >> /etc/fuse.conf
 
-    # Find or create ext4 partition
+    # Find or create writable partition
+    # Priority: ext4 > format biggest partition as ext4
+    # NTFS via NFS is read-only, so we MUST use ext4
     local mounted=0
+
+    # First: try existing ext4 partition
     for pname in $(lsblk -l -o NAME "/dev/$LAN_DISK" 2>/dev/null | tail -n +2 | grep -v "^${LAN_DISK}$"); do
         local fs=$(blkid -o value -s TYPE "/dev/$pname" 2>/dev/null)
-        if [ "$fs" = "ext4" ] || [ "$fs" = "ntfs" ]; then
-            mount "/dev/$pname" "$LAN_NFS_PATH" 2>/dev/null && { mounted=1; echo "         Mounted /dev/$pname"; break; }
+        if [ "$fs" = "ext4" ]; then
+            mount "/dev/$pname" "$LAN_NFS_PATH" 2>/dev/null && { mounted=1; echo "         Mounted ext4 /dev/$pname"; break; }
         fi
     done
 
+    # Second: try NTFS with ntfs-3g (read-write)
     if [ "$mounted" = "0" ]; then
-        # Need to format — find biggest partition or create one
-        local part=""
         for pname in $(lsblk -l -o NAME "/dev/$LAN_DISK" 2>/dev/null | tail -n +2 | grep -v "^${LAN_DISK}$"); do
-            part="$pname"; break
+            local fs=$(blkid -o value -s TYPE "/dev/$pname" 2>/dev/null)
+            if [ "$fs" = "ntfs" ]; then
+                # Try ntfs-3g for read-write NTFS
+                ntfs-3g "/dev/$pname" "$LAN_NFS_PATH" -o rw,big_writes,allow_other 2>/dev/null && { mounted=1; echo "         Mounted NTFS /dev/$pname (ntfs-3g rw)"; break; }
+                # Fallback: regular mount
+                mount -t ntfs-3g "/dev/$pname" "$LAN_NFS_PATH" -o rw,big_writes,allow_other 2>/dev/null && { mounted=1; echo "         Mounted NTFS /dev/$pname (rw)"; break; }
+            fi
+        done
+    fi
+
+    # Third: format biggest partition as ext4
+    if [ "$mounted" = "0" ]; then
+        local part=""
+        local biggest_size=0
+        for pname in $(lsblk -l -o NAME "/dev/$LAN_DISK" 2>/dev/null | tail -n +2 | grep -v "^${LAN_DISK}$"); do
+            local psz=$(blockdev --getsize64 "/dev/$pname" 2>/dev/null)
+            [ -z "$psz" ] && continue
+            if [ "$psz" -gt "$biggest_size" ]; then
+                biggest_size=$psz
+                part="$pname"
+            fi
         done
         if [ -z "$part" ]; then
             echo "         Creating partition..."
@@ -499,6 +524,25 @@ do_lan_server() {
         dialog --msgbox "Cannot prepare storage!" 6 35
         return
     fi
+
+    # Verify writable
+    touch "$LAN_NFS_PATH/.writetest" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "         WARNING: Storage is READ-ONLY!"
+        echo "         NTFS disks need ntfs-3g for write access."
+        echo "         Trying to remount with ntfs-3g..."
+        umount "$LAN_NFS_PATH" 2>/dev/null
+        # Find the mounted partition and try ntfs-3g
+        for pname in $(lsblk -l -o NAME "/dev/$LAN_DISK" 2>/dev/null | tail -n +2 | grep -v "^${LAN_DISK}$"); do
+            ntfs-3g "/dev/$pname" "$LAN_NFS_PATH" -o rw,big_writes,allow_other 2>/dev/null && break
+        done
+        touch "$LAN_NFS_PATH/.writetest" 2>/dev/null
+        if [ $? -ne 0 ]; then
+            dialog --msgbox "Storage is READ-ONLY!\n\nCannot write to disk.\nNeed ext4 formatted disk." 10 50
+            return
+        fi
+    fi
+    rm -f "$LAN_NFS_PATH/.writetest"
 
     local free=$(df -h "$LAN_NFS_PATH" 2>/dev/null | tail -1 | awk '{print $4}')
     echo "         Storage: $free free"
