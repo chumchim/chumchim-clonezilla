@@ -1,23 +1,22 @@
 @echo off
-title ChumChim - School PC Optimize v2
+title ChumChim - School PC Optimize v3
 color 0A
 echo.
 echo  ============================================
-echo    ChumChim - School PC Optimize v2
-echo    Cleanup + Optimize + Shrink for Clone
+echo    ChumChim - School PC Optimize v3
+echo    Cleanup + Optimize + Shrink + School Setup
 echo    Run BEFORE cloning!
 echo  ============================================
 echo.
-echo  This script will:
-echo    Phase 1: Clean temp files, cache, recycle bin
-echo    Phase 2: Disable unnecessary services
-echo    Phase 3: Remove bloatware apps
-echo    Phase 4: Cleanup system components
-echo    Phase 5: Shrink partition (HUGE speed boost!)
-echo    Phase 6: Zero-fill free space (better compression)
+echo  Phase 1: Clean temp/cache/junk files
+echo  Phase 2: Disable unnecessary services
+echo  Phase 3: Remove bloatware apps
+echo  Phase 4: System cleanup + Compact OS
+echo  Phase 5: School environment setup
+echo  Phase 6: Defragment + Shrink partition
+echo  Phase 7: Zero-fill free space
 echo.
-echo  Estimated savings: 20-70 GB
-echo  Clone will be MUCH faster after this!
+echo  Estimated savings: 30-80 GB
 echo.
 pause
 
@@ -31,10 +30,10 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo ====== PHASE 1: CLEANUP (saves 10-30 GB) ======
+echo ====== PHASE 1: CLEANUP (saves 15-40 GB) ======
 echo.
 
-echo [1/6] Cleaning temp files + cache...
+echo [1/10] Cleaning temp files + cache...
 del /q /s "%TEMP%\*" 2>nul
 del /q /s "C:\Windows\Temp\*" 2>nul
 del /q /s "C:\Windows\Prefetch\*" 2>nul
@@ -50,26 +49,33 @@ del /q /s "%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*" 2>nul
 :: Windows Error Reports
 rd /s /q "C:\ProgramData\Microsoft\Windows\WER" 2>nul
 :: Delivery Optimization cache
-del /q /s "C:\Windows\SoftwareDistribution\DeliveryOptimization\*" 2>nul
+rd /s /q "C:\Windows\SoftwareDistribution\DeliveryOptimization" 2>nul
+:: Windows old (from upgrades)
+rd /s /q "C:\Windows.old" 2>nul
+rd /s /q "C:\$WINDOWS.~BT" 2>nul
+rd /s /q "C:\$WINDOWS.~WS" 2>nul
+:: Installer cache
+del /q /s "C:\Windows\Installer\$PatchCache$\*" 2>nul
+:: Font cache
+net stop FontCache >nul 2>&1
+del /q /s "C:\Windows\ServiceProfiles\LocalService\AppData\Local\FontCache\*" 2>nul
+net start FontCache >nul 2>&1
 echo   Done!
 
-echo [2/6] Disabling hibernation...
+echo [2/10] Disabling hibernation + pagefile + swapfile...
 powercfg /h off
-echo   Done! (saved 4-16 GB)
-
-echo [3/6] Disabling pagefile...
 wmic computersystem set AutomaticManagedPagefile=False >nul 2>&1
 wmic pagefileset delete >nul 2>&1
-:: Delete pagefile on disk
 del /f /q "C:\pagefile.sys" 2>nul
 del /f /q "C:\swapfile.sys" 2>nul
-echo   Done! (saved 4-16 GB)
+del /f /q "C:\hiberfil.sys" 2>nul
+echo   Done! (saved 8-32 GB)
 
 echo.
 echo ====== PHASE 2: DISABLE SERVICES ======
 echo.
 
-echo [4/6] Disabling unnecessary services...
+echo [3/10] Disabling unnecessary services...
 :: Windows Update
 sc config wuauserv start= disabled >nul 2>&1
 sc stop wuauserv >nul 2>&1
@@ -82,6 +88,8 @@ reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpywar
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f >nul 2>&1
 sc config WinDefend start= disabled >nul 2>&1
 sc stop WinDefend >nul 2>&1
+:: Delete Defender definitions (1-2 GB)
+rd /s /q "C:\ProgramData\Microsoft\Windows Defender\Definition Updates" 2>nul
 
 :: Search Indexing
 sc config WSearch start= disabled >nul 2>&1
@@ -122,7 +130,7 @@ reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "Skype" /f >n
 reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "Teams" /f >nul 2>&1
 reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Serialize" /v StartupDelayInMSec /t REG_DWORD /d 0 /f >nul 2>&1
 
-:: Disable System Restore
+:: System Restore
 vssadmin delete shadows /for=C: /all /quiet >nul 2>&1
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore" /v DisableSR /t REG_DWORD /d 1 /f >nul 2>&1
 
@@ -132,35 +140,99 @@ echo.
 echo ====== PHASE 3: REMOVE BLOATWARE (saves 2-8 GB) ======
 echo.
 
-echo [5/6] Removing pre-installed apps...
-powershell -Command "Get-AppxPackage -AllUsers | Where-Object {$_.Name -match 'BingWeather|BingNews|BingFinance|BingSports|CandyCrush|Disney|Dolby|Facebook|Flipboard|Spotify|Twitter|TikTok|Netflix|Roblox|McAfee|Norton|ExpressVPN|Clipchamp|LinkedInforWindows|MicrosoftTeams|Todos|MicrosoftOfficeHub|MixedReality|Paint3D|Print3D|3DBuilder|3DViewer|People|Skype|Solitaire|Zune|Xbox|GamingApp|MicrosoftStickyNotes|WindowsMaps|WindowsFeedbackHub|GetHelp|Getstarted|YourPhone|WindowsAlarms|WindowsSoundRecorder|WindowsCamera|MicrosoftNews|PowerAutomate|QuickAssist|Family'} | Remove-AppxPackage -ErrorAction SilentlyContinue" 2>nul
-powershell -Command "Get-AppxProvisionedPackage -Online | Where-Object {$_.DisplayName -match 'BingWeather|BingNews|CandyCrush|Disney|Dolby|Facebook|Spotify|Twitter|TikTok|Netflix|Roblox|McAfee|Norton|Clipchamp|Teams|Todos|OfficeHub|MixedReality|Paint3D|Print3D|3DBuilder|3DViewer|People|Skype|Solitaire|Zune|Xbox|GamingApp|StickyNotes|Maps|FeedbackHub|GetHelp|Getstarted|YourPhone|Alarms|SoundRecorder|News|PowerAutomate|QuickAssist|Family'} | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue" 2>nul
+echo [4/10] Removing pre-installed apps...
+powershell -Command "Get-AppxPackage -AllUsers | Where-Object {$_.Name -match 'BingWeather|BingNews|BingFinance|BingSports|CandyCrush|Disney|Dolby|Facebook|Flipboard|Spotify|Twitter|TikTok|Netflix|Roblox|McAfee|Norton|ExpressVPN|Clipchamp|LinkedInforWindows|MicrosoftTeams|Todos|MicrosoftOfficeHub|MixedReality|Paint3D|Print3D|3DBuilder|3DViewer|People|Skype|Solitaire|Zune|Xbox|GamingApp|MicrosoftStickyNotes|WindowsMaps|WindowsFeedbackHub|GetHelp|Getstarted|YourPhone|WindowsAlarms|WindowsSoundRecorder|WindowsCamera|MicrosoftNews|PowerAutomate|QuickAssist|Family|Widgets|Chat'} | Remove-AppxPackage -ErrorAction SilentlyContinue" 2>nul
+powershell -Command "Get-AppxProvisionedPackage -Online | Where-Object {$_.DisplayName -match 'BingWeather|BingNews|CandyCrush|Disney|Dolby|Facebook|Spotify|Twitter|TikTok|Netflix|Roblox|McAfee|Norton|Clipchamp|Teams|Todos|OfficeHub|MixedReality|Paint3D|Print3D|3DBuilder|3DViewer|People|Skype|Solitaire|Zune|Xbox|GamingApp|StickyNotes|Maps|FeedbackHub|GetHelp|Getstarted|YourPhone|Alarms|SoundRecorder|News|PowerAutomate|QuickAssist|Family|Widgets|Chat'} | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue" 2>nul
 echo   Done!
 
 echo.
-echo ====== PHASE 4: SYSTEM CLEANUP (saves 2-8 GB) ======
+echo ====== PHASE 4: SYSTEM CLEANUP + COMPACT OS (saves 5-15 GB) ======
 echo.
 
-echo [6/6] Cleaning system components...
-:: WinSxS cleanup (old component versions)
+echo [5/10] Cleaning system components...
+:: WinSxS cleanup
 dism /online /Cleanup-Image /StartComponentCleanup /ResetBase >nul 2>&1
 :: Remove unused Windows features
 dism /online /disable-feature /featurename:Windows-Defender-Default-Definitions /norestart >nul 2>&1
 dism /online /disable-feature /featurename:Printing-XPSServices-Features /norestart >nul 2>&1
 dism /online /disable-feature /featurename:WorkFolders-Client /norestart >nul 2>&1
-:: Run Windows Disk Cleanup silently
+dism /online /disable-feature /featurename:FaxServicesClientPackage /norestart >nul 2>&1
+dism /online /disable-feature /featurename:MediaPlayback /norestart >nul 2>&1
+:: Disk Cleanup
 cleanmgr /d C /sagerun:1 >nul 2>&1
 echo   Done!
 
+echo [6/10] Enabling Compact OS (compress Windows files)...
+echo   This saves 5-10 GB. Windows still works normally.
+compact /compactos:always >nul 2>&1
+echo   Done!
+
 echo.
-echo ====== PHASE 5: SHRINK PARTITION ======
+echo ====== PHASE 5: SCHOOL ENVIRONMENT SETUP ======
 echo.
 
-echo  Shrinking C: partition to fit data + 20%% buffer...
-echo  This makes Clone MUCH faster!
+echo [7/10] Configuring for school use...
+
+:: Power settings: never sleep, never turn off screen
+powercfg /change standby-timeout-ac 0
+powercfg /change monitor-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+powercfg /setactive SCHEME_MIN >nul 2>&1
+
+:: Desktop: show useful icons
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel" /v "{20D04FE0-3AEA-1069-A2D8-08002B30309D}" /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel" /v "{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}" /t REG_DWORD /d 0 /f >nul 2>&1
+
+:: Show file extensions
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f >nul 2>&1
+
+:: Disable lock screen
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f >nul 2>&1
+
+:: Disable first login animation
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableFirstLogonAnimation /t REG_DWORD /d 0 /f >nul 2>&1
+
+:: Disable tips/suggestions/ads
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338389Enabled /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-310093Enabled /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338388Enabled /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SystemPaneSuggestionsEnabled /t REG_DWORD /d 0 /f >nul 2>&1
+
+:: Disable Widgets
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /v AllowNewsAndInterests /t REG_DWORD /d 0 /f >nul 2>&1
+
+:: Taskbar: clean up
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowTaskViewButton /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 1 /f >nul 2>&1
+
+:: Set timezone to Thailand
+tzutil /s "SE Asia Standard Time" >nul 2>&1
+
+:: Set Thai keyboard layout (add alongside English)
+powershell -Command "Set-WinUserLanguageList -LanguageList en-US,th-TH -Force" 2>nul
+
+:: Disable USB autoplay (security)
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers" /v DisableAutoplay /t REG_DWORD /d 1 /f >nul 2>&1
+
+:: Disable remote desktop (security)
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 1 /f >nul 2>&1
+
+echo   Done!
+
+echo.
+echo ====== PHASE 6: DEFRAGMENT + SHRINK PARTITION ======
 echo.
 
-:: Get current usage and shrink
+echo [8/10] Defragmenting C: drive...
+echo   This helps shrink partition further...
+defrag C: /O /U >nul 2>&1
+echo   Done!
+
+echo [9/10] Shrinking C: partition...
+echo   This makes Clone MUCH faster!
 powershell -Command ^
   "$drive = Get-PSDrive C; ^
    $usedGB = [math]::Round(($drive.Used)/1GB); ^
@@ -182,13 +254,12 @@ powershell -Command ^
 echo.
 
 echo.
-echo ====== PHASE 6: ZERO-FILL FREE SPACE ======
+echo ====== PHASE 7: ZERO-FILL FREE SPACE ======
 echo.
 
-echo  Zero-filling free space for better compression...
-echo  This may take a few minutes...
-echo.
-:: cipher /w zeros out free space in 3 passes
+echo [10/10] Zero-filling free space...
+echo   This makes clone image MUCH smaller.
+echo   May take 5-10 minutes...
 cipher /w:C >nul 2>&1
 echo   Done!
 
@@ -198,15 +269,17 @@ echo    ALL OPTIMIZATION COMPLETE!
 echo  ============================================
 echo.
 echo  What was done:
-echo    [Phase 1] Temp/cache/pagefile/hibernation cleaned
+echo    [Phase 1] Temp, cache, pagefile, hibernation cleaned
 echo    [Phase 2] Unnecessary services disabled
 echo    [Phase 3] Bloatware apps removed
-echo    [Phase 4] System components cleaned
-echo    [Phase 5] C: partition shrunk to fit data
-echo    [Phase 6] Free space zero-filled
-echo.
-echo  Estimated total savings: 20-70 GB
-echo  Clone image will be MUCH smaller and faster!
+echo    [Phase 4] System cleanup + Compact OS enabled
+echo    [Phase 5] School environment configured
+echo              - Thailand timezone + Thai keyboard
+echo              - No lock screen, no ads, no tips
+echo              - Clean taskbar, useful desktop icons
+echo              - USB autoplay disabled (security)
+echo    [Phase 6] Defragmented + partition shrunk
+echo    [Phase 7] Free space zero-filled
 echo.
 echo  Next steps:
 echo    1. Restart this PC
