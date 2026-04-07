@@ -24,6 +24,8 @@ echo "[3/5] Injecting scripts..."
 cp $SCRIPTS/custom-menu.sh $WORK/squashfs/usr/local/bin/school-menu
 chmod +x $WORK/squashfs/usr/local/bin/school-menu
 cp $SCRIPTS/multicast-server.sh $WORK/squashfs/usr/local/bin/ 2>/dev/null || true
+cp $SCRIPTS/lan-server.sh $WORK/squashfs/usr/local/bin/ 2>/dev/null || true
+chmod +x $WORK/squashfs/usr/local/bin/lan-server.sh 2>/dev/null || true
 
 # Disable Clonezilla's own auto-start
 rm -f $WORK/squashfs/etc/profile.d/*ocs* 2>/dev/null
