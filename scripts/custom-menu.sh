@@ -9,10 +9,12 @@ if [ "$(id -u)" != "0" ]; then
     exec sudo "$0" "$@"
 fi
 
-# Load multicast module
+# Load modules
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$SCRIPT_DIR/multicast-server.sh" ] && source "$SCRIPT_DIR/multicast-server.sh"
 [ -f "/usr/local/bin/multicast-server.sh" ] && source "/usr/local/bin/multicast-server.sh"
+[ -f "$SCRIPT_DIR/lan-server.sh" ] && source "$SCRIPT_DIR/lan-server.sh"
+[ -f "/usr/local/bin/lan-server.sh" ] && source "/usr/local/bin/lan-server.sh"
 
 LOG_FILE="/tmp/chumchim.log"
 BOOT_USB=""
@@ -215,9 +217,53 @@ clone_auto_detect() {
     [ -z "$SRC" ] && { dialog --msgbox "No source disk found!" 8 40; return 1; }
 
     # Auto-detect save: Priority order:
-    # 1. USB boot writable partition (just created if needed) -> best
+    # 0. LAN NFS server (fastest for large images) -> best
+    # 1. USB boot writable partition (just created if needed)
     # 2. USB/removable with enough space -> portable
     # 3. Other internal disk with enough space -> fallback
+
+    # Try LAN NFS first (non-blocking, 3s timeout)
+    if type lan_try_nfs_for_clone >/dev/null 2>&1; then
+        dialog --infobox "\n  Scanning LAN for server..." 5 40
+        if lan_try_nfs_for_clone; then
+            SAVE_DEV="NFS:${LAN_SERVER_IP}"
+            SAVE_FREE_MB=$(df -m /home/partimag 2>/dev/null | tail -1 | awk '{print $4}')
+            [ -z "$SAVE_FREE_MB" ] && SAVE_FREE_MB=999999
+            SAVE_FREE_DETECTED=$SAVE_FREE_MB
+            log "Auto-detect save: LAN NFS at $LAN_SERVER_IP"
+
+            # Auto image name
+            SRC_SIZE=$(lsblk -d -o SIZE /dev/$SRC 2>/dev/null | tail -1 | tr -d ' ')
+            SRC_MODEL=$(lsblk -d -o MODEL /dev/$SRC 2>/dev/null | tail -1 | tr -d ' ')
+            DEFAULT_NAME="Clone-$(date +%d%b)-${SRC}"
+
+            IMG_NAME=$(dialog --title "Image Name" --inputbox \
+                "Detected:\n  Source: /dev/$SRC ($SRC_SIZE)\n  Save:   LAN Server ($LAN_SERVER_IP)\n\nImage name:" \
+                12 55 "$DEFAULT_NAME" 3>&1 1>&2 2>&3)
+            [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
+            [ -z "$IMG_NAME" ] && IMG_NAME="$DEFAULT_NAME"
+
+            IMG_NOTE=$(dialog --title "Note (press OK to skip)" --inputbox \
+                "Installed software e.g. Win11+Office+Adobe:" \
+                8 55 "" 3>&1 1>&2 2>&3)
+            [ -n "$IMG_NOTE" ] && echo "$IMG_NOTE" > /home/partimag/.note_${IMG_NAME}
+
+            if [ -d "/home/partimag/$IMG_NAME" ]; then
+                dialog --yesno "Image '$IMG_NAME' already exists!\n\nOverwrite?" 8 40 || { umount /home/partimag 2>/dev/null; return 1; }
+                rm -rf "/home/partimag/$IMG_NAME"
+            fi
+
+            # LAN = fast, use lz4
+            COMPRESS="-z3"
+            SPEED_INFO="Normal (lz4, via LAN)"
+
+            SAVE_FREE_GB=$((SAVE_FREE_MB / 1024))
+            dialog --yesno "Start clone via LAN?\n\nFrom: /dev/$SRC ($SRC_SIZE)\nTo:   LAN Server ($LAN_SERVER_IP)\nName: $IMG_NAME\nNote: ${IMG_NOTE:-none}\nSpeed: $SPEED_INFO\nFree: ~${SAVE_FREE_GB} GB" 16 60
+            [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
+            return 0
+        fi
+    fi
+
     SAVE_DEV=""
     BEST_USB_DEV=""; BEST_USB_FREE=0
     BEST_INT_DEV=""; BEST_INT_FREE=0
@@ -522,7 +568,49 @@ do_clone() {
 # INSTALL: Auto-detect
 # ============================================
 install_auto_detect() {
-    # Find image automatically
+    # Try LAN NFS first (non-blocking, 3s timeout)
+    if type lan_try_nfs_for_install >/dev/null 2>&1; then
+        dialog --infobox "\n  Scanning LAN for server..." 5 40
+        if lan_try_nfs_for_install; then
+            # NFS mounted at /home/partimag with images
+            lan_select_nfs_image || { umount /home/partimag 2>/dev/null; return 1; }
+            IMG_NAME=$SEL_IMG_NAME
+            SEL_IMG_DEV="NFS:${LAN_SERVER_IP}"
+            log "Install from LAN: $IMG_NAME at $LAN_SERVER_IP"
+
+            # Skip to target detection below (partimag already mounted)
+
+            # Auto-detect target
+            TGT=""
+            TGT_SIZE_BYTES=0
+            for dname in $(lsblk -d -o NAME,TYPE | grep "disk" | awk '{print $1}'); do
+                [ "/dev/$dname" = "$BOOT_USB" ] && continue
+                RM=$(lsblk -d -o RM /dev/$dname 2>/dev/null | tail -1 | tr -d ' ')
+                [ "$RM" = "1" ] && continue
+                DSIZE=$(blockdev --getsize64 /dev/$dname 2>/dev/null)
+                [ -z "$DSIZE" ] && continue
+                if [ "$DSIZE" -gt "$TGT_SIZE_BYTES" ]; then
+                    TGT_SIZE_BYTES=$DSIZE
+                    TGT=$dname
+                fi
+            done
+
+            if [ -z "$TGT" ]; then
+                dialog --msgbox "No target disk found!" 8 40
+                umount /home/partimag 2>/dev/null
+                return 1
+            fi
+
+            TGT_SIZE=$(lsblk -d -o SIZE /dev/$TGT 2>/dev/null | tail -1)
+            TGT_MODEL=$(lsblk -d -o MODEL /dev/$TGT 2>/dev/null | tail -1)
+
+            dialog --yesno "Install from LAN server?\n\nServer:  $LAN_SERVER_IP\nImage:   $IMG_NAME\nTarget:  /dev/$TGT ($TGT_SIZE)\nModel:   $TGT_MODEL\n\n*** ALL DATA ON /dev/$TGT WILL BE ERASED! ***" 16 55
+            [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
+            return 0
+        fi
+    fi
+
+    # Fallback: find image on local USB/disk
     select_image || return 1
 
     mkdir -p /home/partimag
@@ -786,19 +874,21 @@ show_help() {
     dialog --title "Help" --msgbox "\
 ChumChim-Clonezilla v3.0\n\n\
 [1] Clone this PC\n\
-    Copy everything (Windows, programs, files)\n\
-    from this PC into an image file.\n\n\
+    Save this PC as image (USB or LAN).\n\
+    Auto-detects LAN server if available.\n\n\
 [2] Install to PC\n\
-    Take an image and install it to this PC.\n\
-    WARNING: erases everything on target disk.\n\n\
-[3] Deploy to many PCs\n\
-    Use LAN to install image to many PCs\n\
-    at once (Multicast).\n\n\
-Workflow:\n\
-  1. Install software on one PC\n\
-  2. Clone it\n\
-  3. Install to other PCs\n\
-  4. Done!" 22 55
+    Install image to this PC.\n\
+    Auto-detects LAN server for images.\n\n\
+[3] Deploy to many PCs (Multicast)\n\n\
+[4] Manage Images\n\n\
+[5] LAN Server\n\
+    Turn this PC into a clone server.\n\
+    Uses largest HDD, shares via NFS.\n\
+    Other PCs auto-discover this server.\n\n\
+LAN Clone workflow:\n\
+  1. PC-B: Boot USB > LAN Server\n\
+  2. PC-A: Boot USB > Clone (saves to LAN)\n\
+  3. PC-C,D,E: Boot USB > Install (from LAN)" 24 55
 }
 
 # ============================================
@@ -978,12 +1068,13 @@ show_splash
 
 while true; do
     choice=$(dialog --title "ChumChim-Clonezilla v3.0" \
-        --menu "Select:" 15 55 6 \
+        --menu "Select:" 17 55 7 \
         1 "Clone this PC       (save as image)" \
         2 "Install to PC       (install image)" \
         3 "Deploy to many PCs  (LAN Multicast)" \
         4 "Manage Images" \
-        5 "Help" \
+        5 "LAN Server          (share via network)" \
+        6 "Help" \
         0 "Shutdown" \
         3>&1 1>&2 2>&3)
 
@@ -992,7 +1083,8 @@ while true; do
         2) do_install ;;
         3) do_multicast 2>/dev/null || dialog --msgbox "Multicast not ready.\nUse USB method instead." 8 40 ;;
         4) do_manage ;;
-        5) show_help ;;
+        5) do_lan_server 2>/dev/null || dialog --msgbox "LAN Server not available." 6 35 ;;
+        6) show_help ;;
         0) do_shutdown ;;
         *) continue ;;
     esac
