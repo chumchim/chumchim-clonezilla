@@ -36,14 +36,23 @@ if %errorlevel% neq 0 (
 echo.
 echo [1/3] Preparing Sysprep...
 
-:: Remove AppX packages that block Sysprep
+:: Remove ALL AppX packages that block Sysprep
 echo   Removing AppX packages that block Sysprep...
-powershell -Command "Get-AppxPackage -AllUsers | Where-Object {$_.PackageUserInformation -match 'Staged'} | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue" 2>nul
+powershell -Command "Get-AppxPackage -AllUsers | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue" 2>nul
+powershell -Command "Get-AppxProvisionedPackage -Online | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue" 2>nul
 
-:: Disable AppX Sysprep generalize check (common blocker)
+:: Disable AppX Sysprep generalize check
+echo   Disabling AppX Sysprep checks...
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.549981C3F5F10_8wekyb3d8bbwe" /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.YourPhone_8wekyb3d8bbwe" /f >nul 2>&1
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.WindowsFeedbackHub_8wekyb3d8bbwe" /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.WindowsCommunicationsApps_8wekyb3d8bbwe" /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.MicrosoftEdge.Stable_8wekyb3d8bbwe" /f >nul 2>&1
+
+:: Disable Sysprep AppX validation (force bypass)
+reg add "HKLM\SYSTEM\Setup\Sysprep\Settings\Microsoft-Windows-AppxSysprep" /v CleanupState /t REG_DWORD /d 0 /f >nul 2>&1
+takeown /f "%SystemRoot%\System32\Sysprep\ActionFiles\Generalize.xml" >nul 2>&1
+icacls "%SystemRoot%\System32\Sysprep\ActionFiles\Generalize.xml" /grant Administrators:F >nul 2>&1
 
 echo   Done!
 

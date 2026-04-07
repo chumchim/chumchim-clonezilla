@@ -212,15 +212,9 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTask
 tzutil /s "SE Asia Standard Time" >nul 2>&1
 
 :: Set languages: English (US) + Thai
-:: English as display language, Thai keyboard added
-powershell -Command ^
-  "$langs = New-WinUserLanguageList en-US; ^
-   $thai = New-WinUserLanguageList th-TH; ^
-   $langs += $thai[0]; ^
-   Set-WinUserLanguageList $langs -Force" 2>nul
-
+powershell -Command "$l = New-WinUserLanguageList en-US; $t = New-WinUserLanguageList th-TH; $l.Add($t[0]); Set-WinUserLanguageList $l -Force" 2>nul
 :: Set system locale to Thai (for Thai app support)
-powershell -Command "Set-WinSystemLocale -SystemLocale th-TH" 2>nul
+powershell -Command "Set-WinSystemLocale th-TH" 2>nul
 :: Set region to Thailand
 powershell -Command "Set-WinHomeLocation -GeoId 227" 2>nul
 :: Set date/time format to Thai
@@ -245,24 +239,9 @@ echo   Done!
 
 echo [9/10] Shrinking C: partition...
 echo   This makes Clone MUCH faster!
-powershell -Command ^
-  "$drive = Get-PSDrive C; ^
-   $usedGB = [math]::Round(($drive.Used)/1GB); ^
-   $freeGB = [math]::Round(($drive.Free)/1GB); ^
-   $totalGB = $usedGB + $freeGB; ^
-   $targetGB = [math]::Round($usedGB * 1.3); ^
-   $shrinkMB = [math]::Round(($totalGB - $targetGB) * 1024); ^
-   Write-Host \"  Current: ${totalGB}GB (Used: ${usedGB}GB, Free: ${freeGB}GB)\"; ^
-   Write-Host \"  Target:  ${targetGB}GB (Used + 30%% buffer)\"; ^
-   Write-Host \"  Shrink:  ${shrinkMB}MB\"; ^
-   if ($shrinkMB -gt 1024) { ^
-     Write-Host '  Shrinking...' -ForegroundColor Yellow; ^
-     $size = (Get-Partition -DriveLetter C).Size - ($shrinkMB * 1MB); ^
-     Resize-Partition -DriveLetter C -Size $size -ErrorAction SilentlyContinue; ^
-     Write-Host '  Done!' -ForegroundColor Green; ^
-   } else { ^
-     Write-Host '  Partition already small enough, skipping.' -ForegroundColor Green; ^
-   }"
+echo $d=Get-PSDrive C;$u=[math]::Round($d.Used/1GB);$f=[math]::Round($d.Free/1GB);$t=$u+$f;$g=[math]::Round($u*1.3);$s=[math]::Round(($t-$g)*1024);Write-Host "  Current: ${t}GB (Used: ${u}GB, Free: ${f}GB)";Write-Host "  Target: ${g}GB";if($s -gt 1024){Write-Host "  Shrinking ${s}MB...";$sz=(Get-Partition -DriveLetter C).Size-($s*1MB);Resize-Partition -DriveLetter C -Size $sz -ErrorAction SilentlyContinue;Write-Host "  Done!"}else{Write-Host "  Already small enough"} > "%TEMP%\shrink.ps1"
+powershell -ExecutionPolicy Bypass -File "%TEMP%\shrink.ps1" 2>nul
+del "%TEMP%\shrink.ps1" 2>nul
 echo.
 
 echo.
