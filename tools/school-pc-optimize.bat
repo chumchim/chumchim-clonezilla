@@ -250,8 +250,9 @@ echo.
 
 echo [10/10] Zero-filling free space...
 echo   This makes clone image MUCH smaller.
-echo   May take 5-10 minutes...
-cipher /w:C >nul 2>&1
+echo   Creating zero file (fast method)...
+powershell -Command "$f=[System.IO.File]::Create('C:\zero.tmp');$b=New-Object byte[] (256MB);while($true){try{$f.Write($b,0,$b.Length)}catch{break}};$f.Close()" 2>nul
+del /f /q C:\zero.tmp 2>nul
 echo   Done!
 
 echo.
