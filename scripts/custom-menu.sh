@@ -17,7 +17,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="/tmp/chumchim.log"
 BOOT_USB=""
 
-log() { echo "[$(date '+%H:%M:%S')] $1" >> $LOG_FILE; }
+log() { echo "[$(date '+%H:%M:%S')] $1" >> "$LOG_FILE"; }
+
+# Friendly name for a device (e.g. /dev/sdb3 -> "USB: SanDisk 32GB")
+friendly_name() {
+    local DEV="$1"
+    local DISK=$(echo "$DEV" | sed 's/[0-9]*$//;s/p[0-9]*$//')
+    local MODEL=$(lsblk -d -o MODEL "$DISK" 2>/dev/null | tail -1 | sed 's/^ *//;s/ *$//')
+    local DSIZE=$(lsblk -d -o SIZE "$DISK" 2>/dev/null | tail -1 | tr -d ' ')
+    local RM=$(lsblk -d -o RM "$DISK" 2>/dev/null | tail -1 | tr -d ' ')
+    local TYPE="Disk"
+    [ "$RM" = "1" ] && TYPE="USB"
+    [ "$DISK" = "$BOOT_USB" ] && TYPE="USB Boot"
+    echo "$TYPE: $MODEL $DSIZE ($DEV)"
+}
 
 # ============================================
 # Find boot USB (to exclude from selection)
@@ -164,37 +177,61 @@ clone_auto_detect() {
     fi
     [ -z "$SRC" ] && { dialog --msgbox "No source disk found!" 8 40; return 1; }
 
-    # Auto-detect save: find any writable partition on any disk that is NOT the source
-    # Priority: 1) USB/removable  2) any other disk
+    # Auto-detect save: Priority order:
+    # 1. USB/removable with enough space -> best (portable)
+    # 2. Other internal disk with enough space -> fallback
+    SAVE_DEV=""
+    BEST_USB_DEV=""; BEST_USB_FREE=0
+    BEST_INT_DEV=""; BEST_INT_FREE=0
+
     for dname in $(lsblk -d -o NAME,TYPE | grep "disk" | awk '{print $1}'); do
         [ "$dname" = "$SRC" ] && continue
-        # Find first mountable writable partition
+        REMOVABLE=$(lsblk -d -o RM /dev/$dname 2>/dev/null | tail -1 | tr -d ' ')
         for pname in $(lsblk -l -o NAME /dev/$dname 2>/dev/null | tail -n +2 | grep -v "^${dname}$"); do
             FS=$(blkid -o value -s TYPE /dev/$pname 2>/dev/null)
-            # Skip iso9660 (read-only) and tiny partitions (<100MB)
             [ "$FS" = "iso9660" ] && continue
             [ "$FS" = "squashfs" ] && continue
-            PSIZE=$(blockdev --getsize64 /dev/$pname 2>/dev/null)
-            [ -z "$PSIZE" ] && continue
-            PSIZE_MB=$((PSIZE / 1048576))
-            [ "$PSIZE_MB" -lt 100 ] && continue
-            # Try mount
+            PSIZE=$(($(blockdev --getsize64 /dev/$pname 2>/dev/null) / 1048576))
+            [ "$PSIZE" -lt 100 ] && continue
             mkdir -p /tmp/_autocheck
-            mount /dev/$pname /tmp/_autocheck 2>/dev/null
+            mount /dev/$pname /tmp/_autocheck 2>/dev/null || continue
+            touch /tmp/_autocheck/.writetest 2>/dev/null
             if [ $? -eq 0 ]; then
-                # Check writable
-                touch /tmp/_autocheck/.writetest 2>/dev/null
-                if [ $? -eq 0 ]; then
-                    rm -f /tmp/_autocheck/.writetest
-                    umount /tmp/_autocheck 2>/dev/null
-                    SAVE_DEV="/dev/$pname"
-                    break 2
+                rm -f /tmp/_autocheck/.writetest
+                FREE_MB=$(df -m /tmp/_autocheck 2>/dev/null | tail -1 | awk '{print $4}')
+                [ -z "$FREE_MB" ] && FREE_MB=0
+                if [ "$REMOVABLE" = "1" ] || [ "/dev/$dname" = "$BOOT_USB" ]; then
+                    # USB/removable
+                    if [ "$FREE_MB" -gt "$BEST_USB_FREE" ]; then
+                        BEST_USB_FREE=$FREE_MB
+                        BEST_USB_DEV="/dev/$pname"
+                    fi
+                else
+                    # Internal disk
+                    if [ "$FREE_MB" -gt "$BEST_INT_FREE" ]; then
+                        BEST_INT_FREE=$FREE_MB
+                        BEST_INT_DEV="/dev/$pname"
+                    fi
                 fi
-                umount /tmp/_autocheck 2>/dev/null
             fi
+            umount /tmp/_autocheck 2>/dev/null
         done
     done
-    [ -z "$SAVE_DEV" ] && { dialog --msgbox "No writable disk found for saving image!\n\nNeed USB, External HDD, or\na second internal disk." 10 50; return 1; }
+
+    # Choose: prefer USB if it has enough space, else use internal
+    if [ -n "$BEST_USB_DEV" ] && [ "$BEST_USB_FREE" -gt 0 ]; then
+        SAVE_DEV="$BEST_USB_DEV"
+        SAVE_FREE_DETECTED=$BEST_USB_FREE
+    elif [ -n "$BEST_INT_DEV" ] && [ "$BEST_INT_FREE" -gt 0 ]; then
+        SAVE_DEV="$BEST_INT_DEV"
+        SAVE_FREE_DETECTED=$BEST_INT_FREE
+    fi
+
+    if [ -z "$SAVE_DEV" ]; then
+        dialog --msgbox "No writable disk found!\n\nPlug in USB or External HDD\nand try again." 10 50
+        return 1
+    fi
+    log "Auto-detect save: $SAVE_DEV ($(friendly_name $SAVE_DEV))"
 
     # Mount save
     mkdir -p /home/partimag
@@ -222,13 +259,52 @@ clone_auto_detect() {
         rm -rf "/home/partimag/$IMG_NAME"
     fi
 
-    # Check free space
+    # Check free space (use lsblk for unmounted partitions)
     SAVE_FREE_MB=$(df -m /home/partimag 2>/dev/null | tail -1 | awk '{print $4}')
-    SRC_USED_MB=$(df -m /dev/${SRC}* 2>/dev/null | tail -n +2 | awk '{s+=$3} END {print s}')
-    [ -z "$SRC_USED_MB" ] && SRC_USED_MB=0
     [ -z "$SAVE_FREE_MB" ] && SAVE_FREE_MB=0
+
+    # Get source used space: try mount temporarily, fall back to partition size
+    SRC_USED_MB=0
+    for spart in /dev/${SRC}[0-9]* /dev/${SRC}p[0-9]*; do
+        [ -b "$spart" ] || continue
+        mkdir -p /tmp/_srccheck
+        mount -o ro "$spart" /tmp/_srccheck 2>/dev/null
+        if [ $? -eq 0 ]; then
+            USED=$(df -m /tmp/_srccheck 2>/dev/null | tail -1 | awk '{print $3}')
+            [ -n "$USED" ] && SRC_USED_MB=$((SRC_USED_MB + USED))
+            umount /tmp/_srccheck 2>/dev/null
+        else
+            # Can't mount: estimate from partition size
+            PSIZE=$(($(blockdev --getsize64 "$spart" 2>/dev/null) / 1048576))
+            [ -n "$PSIZE" ] && SRC_USED_MB=$((SRC_USED_MB + PSIZE))
+        fi
+    done
+    rmdir /tmp/_srccheck 2>/dev/null
+
     SAVE_FREE_GB=$((SAVE_FREE_MB / 1024))
     SRC_USED_GB=$((SRC_USED_MB / 1024))
+    # Estimate compressed image size (~40% of used)
+    EST_IMAGE_MB=$((SRC_USED_MB * 40 / 100))
+    EST_IMAGE_GB=$((EST_IMAGE_MB / 1024))
+
+    # If USB doesn't have enough space, auto-switch to internal disk
+    if [ "$SAVE_FREE_MB" -gt 0 ] && [ "$SRC_USED_MB" -gt 0 ]; then
+        if [ "$SAVE_FREE_MB" -lt "$((SRC_USED_MB / 4))" ]; then
+            # Current save is too small — try internal disk
+            if [ -n "$BEST_INT_DEV" ] && [ "$BEST_INT_FREE" -gt "$((SRC_USED_MB / 4))" ]; then
+                umount /home/partimag 2>/dev/null
+                SAVE_DEV="$BEST_INT_DEV"
+                mount $SAVE_DEV /home/partimag 2>/dev/null || { dialog --msgbox "Cannot mount $SAVE_DEV" 6 40; return 1; }
+                SAVE_FREE_MB=$BEST_INT_FREE
+                SAVE_FREE_GB=$((SAVE_FREE_MB / 1024))
+                log "Auto-switched to internal: $SAVE_DEV (${SAVE_FREE_GB}GB free)"
+            else
+                umount /home/partimag 2>/dev/null
+                dialog --msgbox "NOT ENOUGH SPACE!\n\nSource used:     ~${SRC_USED_GB} GB\nEstimated image: ~${EST_IMAGE_GB} GB\nSave free:       ~${SAVE_FREE_GB} GB\n\nNeed USB or External HDD\nwith ~${EST_IMAGE_GB}GB+ free." 16 55
+                return 1
+            fi
+        fi
+    fi
 
     # Auto-select compression based on free space
     if [ "$SAVE_FREE_MB" -gt 0 ] && [ "$SRC_USED_MB" -gt 0 ]; then
@@ -240,8 +316,8 @@ clone_auto_detect() {
             COMPRESS="-z3"   # Enough space: lz4 = fast + good ratio
             SPEED_INFO="Normal (lz4)"
         else
-            COMPRESS="-z1p"  # Tight space: gzip = smaller image
-            SPEED_INFO="Small (gzip, slower)"
+            COMPRESS="-z5p"  # Tight space: xz = smallest image
+            SPEED_INFO="Max compress (xz, slower but smallest)"
         fi
     else
         COMPRESS="-z3"
@@ -249,7 +325,9 @@ clone_auto_detect() {
     fi
 
     # Confirm
-    dialog --yesno "Start clone?\n\nSource:  /dev/$SRC ($SRC_SIZE)\nSave to: $SAVE_DEV\nName:    $IMG_NAME\nNote:    ${IMG_NOTE:-none}\nSpeed:   $SPEED_INFO\nFree:    ~${SAVE_FREE_GB} GB" 16 55
+    SAVE_FRIENDLY=$(friendly_name "$SAVE_DEV")
+    SRC_FRIENDLY=$(friendly_name "/dev/$SRC")
+    dialog --yesno "Start clone?\n\nFrom: $SRC_FRIENDLY\nTo:   $SAVE_FRIENDLY\nName: $IMG_NAME\nNote: ${IMG_NOTE:-none}\nSpeed: $SPEED_INFO\nFree: ~${SAVE_FREE_GB} GB" 16 60
     [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
     return 0
 }
@@ -280,17 +358,31 @@ clone_manual_select() {
     mkdir -p /home/partimag
     mount $SAVE_DEV /home/partimag 2>/dev/null || { dialog --msgbox "Cannot mount $SAVE_DEV" 6 40; return 1; }
 
-    # Check free space
+    # Check free space (temp mount for unmounted NTFS partitions)
     SAVE_FREE_MB=$(df -m /home/partimag 2>/dev/null | tail -1 | awk '{print $4}')
-    SRC_USED_MB=$(df -m /dev/${SRC}* 2>/dev/null | tail -n +2 | awk '{s+=$3} END {print s}')
-    [ -z "$SRC_USED_MB" ] && SRC_USED_MB=0
+    SRC_USED_MB=0
+    for spart in /dev/${SRC}[0-9]* /dev/${SRC}p[0-9]*; do
+        [ -b "$spart" ] || continue
+        mkdir -p /tmp/_mcheck
+        mount -o ro "$spart" /tmp/_mcheck 2>/dev/null
+        if [ $? -eq 0 ]; then
+            USED=$(df -m /tmp/_mcheck 2>/dev/null | tail -1 | awk '{print $3}')
+            [ -n "$USED" ] && SRC_USED_MB=$((SRC_USED_MB + USED))
+            umount /tmp/_mcheck 2>/dev/null
+        else
+            PSIZE=$(($(blockdev --getsize64 "$spart" 2>/dev/null) / 1048576))
+            [ -n "$PSIZE" ] && SRC_USED_MB=$((SRC_USED_MB + PSIZE))
+        fi
+    done
+    rmdir /tmp/_mcheck 2>/dev/null
     [ -z "$SAVE_FREE_MB" ] && SAVE_FREE_MB=0
     SAVE_FREE_GB=$((SAVE_FREE_MB / 1024))
     SRC_USED_GB=$((SRC_USED_MB / 1024))
+    EST_IMAGE_GB=$((SRC_USED_MB * 40 / 100 / 1024))
 
     if [ "$SAVE_FREE_MB" -gt 0 ] && [ "$SRC_USED_MB" -gt 0 ]; then
-        if [ "$SAVE_FREE_MB" -lt "$((SRC_USED_MB / 2))" ]; then
-            dialog --yesno "WARNING: Low disk space!\n\nSource used: ~${SRC_USED_GB} GB\nSave free:   ~${SAVE_FREE_GB} GB\n\nContinue anyway?" 12 50
+        if [ "$SAVE_FREE_MB" -lt "$((SRC_USED_MB / 4))" ]; then
+            dialog --yesno "WARNING: Low disk space!\n\nSource used:     ~${SRC_USED_GB} GB\nEstimated image: ~${EST_IMAGE_GB} GB\nSave free:       ~${SAVE_FREE_GB} GB\n\nContinue anyway?" 14 55
             [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
         fi
     fi
@@ -372,7 +464,8 @@ do_clone() {
         SIZE=$(du -sh /home/partimag/$IMG_NAME 2>/dev/null | cut -f1)
         if verify_image "/home/partimag/$IMG_NAME"; then
             log "Clone OK: $IMG_NAME ($SIZE)"
-            dialog --msgbox "CLONE COMPLETE!\n\nImage: $IMG_NAME\nSize:  $SIZE\nNote:  ${IMG_NOTE:-none}" 10 50
+            SAVE_FRIENDLY=$(friendly_name "$SAVE_DEV")
+            dialog --msgbox "CLONE COMPLETE!\n\nImage:  $IMG_NAME\nSize:   $SIZE\nSaved:  $SAVE_FRIENDLY\nFolder: $IMG_NAME\nNote:   ${IMG_NOTE:-none}" 14 60
         else
             log "Clone WARN: image verification failed"
             dialog --msgbox "Clone finished but verification FAILED!\n\nImage may be incomplete.\nCheck log: $LOG_FILE" 10 50
@@ -408,7 +501,10 @@ install_auto_detect() {
         # Skip disk that has the image
         IMG_BASE=$(echo "$SEL_IMG_DEV" | sed 's/[0-9]*$//;s/p[0-9]*$//' | sed 's|/dev/||')
         [ "$dname" = "$IMG_BASE" ] && continue
-        # Pick the largest non-removable disk
+        # Skip removable/USB disks (don't install to USB by accident)
+        RM=$(lsblk -d -o RM /dev/$dname 2>/dev/null | tail -1 | tr -d ' ')
+        [ "$RM" = "1" ] && continue
+        # Pick the largest internal disk
         DSIZE=$(blockdev --getsize64 /dev/$dname 2>/dev/null)
         [ -z "$DSIZE" ] && continue
         if [ "$DSIZE" -gt "$TGT_SIZE_BYTES" ]; then

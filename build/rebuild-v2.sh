@@ -50,7 +50,7 @@ BOOT_DEV=""
 for dev in /dev/sd*[0-9]* /dev/nvme*p[0-9]*; do
     mkdir -p /tmp/_bp 2>/dev/null
     mount -o ro "$dev" /tmp/_bp 2>/dev/null || continue
-    if [ -d "/tmp/_bp/live" ] || [ -f "/tmp/_bp/filesystem.squashfs" ]; then
+    if [ -d "/tmp/_bp/live" ] || [ -f "/tmp/_bp/live/filesystem.squashfs" ] || [ -f "/tmp/_bp/filesystem.squashfs" ]; then
         BOOT_DEV=$(echo "$dev" | sed 's/[0-9]*$//;s/p[0-9]*$//')
         umount /tmp/_bp 2>/dev/null
         break
@@ -116,6 +116,7 @@ echo "[4/5] Modifying boot config..."
 # GRUB (UEFI)
 cat > $WORK/iso/boot/grub/grub.cfg << 'EOF'
 search --no-floppy --label --set=root ChumChimV3
+search --no-floppy --file --set=root /live/vmlinuz
 set default="0"
 set timeout="5"
 menuentry "ChumChim-Clonezilla v3.0" {
