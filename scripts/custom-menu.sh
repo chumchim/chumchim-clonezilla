@@ -237,9 +237,10 @@ clone_auto_detect() {
             SRC_MODEL=$(lsblk -d -o MODEL /dev/$SRC 2>/dev/null | tail -1 | tr -d ' ')
             DEFAULT_NAME="Clone-$(date +%d%b)-${SRC}"
 
+            SRC_FRIENDLY=$(friendly_name "/dev/$SRC")
             IMG_NAME=$(dialog --title "Image Name" --inputbox \
-                "Detected:\n  Source: /dev/$SRC ($SRC_SIZE)\n  Save:   LAN Server ($LAN_SERVER_IP)\n\nImage name:" \
-                12 55 "$DEFAULT_NAME" 3>&1 1>&2 2>&3)
+                "Detected:\n  Source: $SRC_FRIENDLY\n  Save:   LAN Server ($LAN_SERVER_IP)\n\nImage name:" \
+                12 60 "$DEFAULT_NAME" 3>&1 1>&2 2>&3)
             [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
             [ -z "$IMG_NAME" ] && IMG_NAME="$DEFAULT_NAME"
 
@@ -258,7 +259,7 @@ clone_auto_detect() {
             SPEED_INFO="Normal (lz4, via LAN)"
 
             SAVE_FREE_GB=$((SAVE_FREE_MB / 1024))
-            dialog --yesno "Start clone via LAN?\n\nFrom: /dev/$SRC ($SRC_SIZE)\nTo:   LAN Server ($LAN_SERVER_IP)\nName: $IMG_NAME\nNote: ${IMG_NOTE:-none}\nSpeed: $SPEED_INFO\nFree: ~${SAVE_FREE_GB} GB" 16 60
+            dialog --yesno "Start clone via LAN?\n\nFrom:  $SRC_FRIENDLY\nTo:    LAN Server ($LAN_SERVER_IP)\nName:  $IMG_NAME\nNote:  ${IMG_NOTE:-none}\nSpeed: $SPEED_INFO\nFree:  ~${SAVE_FREE_GB} GB" 16 60
             [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
             return 0
         fi
@@ -356,9 +357,11 @@ clone_auto_detect() {
     DEFAULT_NAME="Clone-$(date +%d%b)-${SRC}"
 
     # Single screen: name + note
+    SRC_FRIENDLY=$(friendly_name "/dev/$SRC")
+    SAVE_FRIENDLY=$(friendly_name "$SAVE_DEV")
     IMG_NAME=$(dialog --title "Image Name" --inputbox \
-        "Detected:\n  Source: /dev/$SRC ($SRC_SIZE)\n  Save:   $SAVE_DEV\n\nImage name:" \
-        12 55 "$DEFAULT_NAME" 3>&1 1>&2 2>&3)
+        "Detected:\n  Source: $SRC_FRIENDLY\n  Save:   $SAVE_FRIENDLY\n\nImage name:" \
+        12 60 "$DEFAULT_NAME" 3>&1 1>&2 2>&3)
     [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
     [ -z "$IMG_NAME" ] && IMG_NAME="$DEFAULT_NAME"
 
@@ -499,7 +502,9 @@ clone_manual_select() {
     esac
 
     # Confirm
-    dialog --yesno "Start clone?\n\nSource:  /dev/$SRC ($SRC_SIZE)\nSave to: $SAVE_DEV\nName:    $IMG_NAME\nNote:    ${IMG_NOTE:-none}\nFree:    ~${SAVE_FREE_GB} GB" 14 55
+    SRC_FRIENDLY=$(friendly_name "/dev/$SRC")
+    SAVE_FRIENDLY=$(friendly_name "$SAVE_DEV")
+    dialog --yesno "Start clone?\n\nFrom: $SRC_FRIENDLY\nTo:   $SAVE_FRIENDLY\nName: $IMG_NAME\nNote: ${IMG_NOTE:-none}\nFree: ~${SAVE_FREE_GB} GB" 14 60
     [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
     return 0
 }
