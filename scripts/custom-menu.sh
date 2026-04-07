@@ -316,6 +316,9 @@ do_clone() {
         SIZE=$(du -sh /home/partimag/$IMG_NAME 2>/dev/null | cut -f1)
         if verify_image "/home/partimag/$IMG_NAME"; then
             log "Clone OK: $IMG_NAME ($SIZE)"
+            # Report to server
+            MY_IP=$(ip -4 addr show 2>/dev/null | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -1)
+            echo "$(date '+%H:%M:%S')|$MY_IP|CLONE|OK|$IMG_NAME|$SIZE" >> /home/partimag/.client_status 2>/dev/null
             dialog --msgbox "CLONE COMPLETE!\n\nImage: $IMG_NAME\nSize:  $SIZE\nSaved: $SAVE_DISPLAY" 10 55
         else
             log "Clone WARN: verification failed"
@@ -413,9 +416,14 @@ do_install() {
 
     if [ $OCS_RC -eq 0 ]; then
         log "Install OK: $IMG_NAME -> /dev/$TGT"
+        # Report to server
+        MY_IP=$(ip -4 addr show 2>/dev/null | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -1)
+        echo "$(date '+%H:%M:%S')|$MY_IP|INSTALL|OK|$IMG_NAME|$TGT" >> /home/partimag/.client_status 2>/dev/null
         dialog --msgbox "INSTALL COMPLETE!\n\nRemove USB and restart." 8 40
     else
         log "Install FAILED"
+        MY_IP=$(ip -4 addr show 2>/dev/null | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -1)
+        echo "$(date '+%H:%M:%S')|$MY_IP|INSTALL|FAILED|$IMG_NAME|$TGT" >> /home/partimag/.client_status 2>/dev/null
         LAST_ERR=$(tail -30 "$LOG_FILE" 2>/dev/null)
         dialog --title "INSTALL FAILED" --msgbox "Install failed!\n\nLast log:\n$LAST_ERR" 20 70
     fi

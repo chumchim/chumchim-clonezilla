@@ -275,28 +275,87 @@ do_lan_server() {
     ) &
     echo "         Beacon: broadcasting on $bcast:$LAN_PORT"
 
-    echo ""
-    echo "  ============================================"
-    echo "    LAN SERVER READY!"
-    echo "  ============================================"
-    echo ""
-    echo "    IP:       $LAN_IP"
-    echo "    Disk:     /dev/$LAN_DISK ($disk_gb GB)"
-    echo "    Storage:  $free free"
-    echo "    NFS:      $LAN_NFS_PATH"
-    echo ""
-    echo "    Other PCs: just select Clone or Install"
-    echo "    They will find this server automatically."
-    echo ""
-    echo "    Press Ctrl+C to stop server."
-    echo "  ============================================"
-
-    # Keep running — show status every 30 seconds
+    # Dashboard loop — refresh every 10 seconds
     while true; do
-        sleep 30
-        local imgs=$(ls -d $LAN_NFS_PATH/*/ 2>/dev/null | wc -l)
+        clear
         local free=$(df -h "$LAN_NFS_PATH" 2>/dev/null | tail -1 | awk '{print $4}')
+        local used=$(df -h "$LAN_NFS_PATH" 2>/dev/null | tail -1 | awk '{print $3}')
         local clients=$(cat /var/lib/nfs/rmtab 2>/dev/null | wc -l)
-        echo "  [$(date '+%H:%M:%S')] Images: $imgs | Free: $free | Clients: $clients"
+
+        echo ""
+        echo "  ╔══════════════════════════════════════════╗"
+        echo "  ║       ChumChim LAN Server  [READY]       ║"
+        echo "  ╚══════════════════════════════════════════╝"
+        echo ""
+        echo "  Server IP:    $LAN_IP"
+        echo "  Disk:         /dev/$LAN_DISK ($disk_gb GB) $disk_model"
+        echo "  Storage:      $used used / $free free"
+        echo "  Connected:    $clients PC(s)"
+        echo ""
+        echo "  Other PCs: just select Clone or Install"
+        echo "  They will find this server automatically."
+        echo ""
+
+        # Image table
+        echo "  ┌──────────────────────────────────────────┐"
+        echo "  │  IMAGES                                  │"
+        echo "  ├──────────────────────────────────────────┤"
+        local img_count=0
+        for dir in $LAN_NFS_PATH/*/; do
+            [ -f "${dir}disk" ] 2>/dev/null || continue
+            img_count=$((img_count + 1))
+            local name=$(basename "$dir")
+            local size=$(du -sh "$dir" 2>/dev/null | cut -f1)
+            local date=$(stat -c %Y "$dir" 2>/dev/null)
+            local date_fmt=$(date -d "@$date" '+%Y-%m-%d %H:%M' 2>/dev/null)
+            local note=""
+            [ -f "$LAN_NFS_PATH/.note_${name}" ] && note=$(cat "$LAN_NFS_PATH/.note_${name}" 2>/dev/null)
+            printf "  │  %-20s %6s  %s\n" "$name" "$size" "$date_fmt"
+            [ -n "$note" ] && printf "  │    Note: %s\n" "$note"
+        done
+        if [ $img_count -eq 0 ]; then
+            echo "  │  (no images yet — waiting for Clone)   │"
+        fi
+        echo "  └──────────────────────────────────────────┘"
+
+        # Client status
+        echo ""
+        echo "  ┌──────────────────────────────────────────────────┐"
+        echo "  │  PC STATUS                                       │"
+        echo "  ├──────────────────────────────────────────────────┤"
+        printf "  │  %-8s %-16s %-8s %-7s %-10s │\n" "TIME" "IP" "ACTION" "STATUS" "IMAGE"
+        echo "  ├──────────────────────────────────────────────────┤"
+        local has_status=0
+        if [ -f "$LAN_NFS_PATH/.client_status" ]; then
+            while IFS='|' read -r time ip action status image extra; do
+                [ -z "$time" ] && continue
+                has_status=1
+                local icon="..."
+                [ "$status" = "OK" ] && icon="[OK]"
+                [ "$status" = "FAILED" ] && icon="[X]"
+                printf "  │  %-8s %-16s %-8s %-7s %-10s │\n" "$time" "$ip" "$action" "$icon" "$image"
+            done < "$LAN_NFS_PATH/.client_status"
+        fi
+        # Show currently connected (active)
+        if [ -f /var/lib/nfs/rmtab ]; then
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                local cip=$(echo "$line" | cut -d: -f1)
+                # Check if already in status file
+                if ! grep -q "$cip" "$LAN_NFS_PATH/.client_status" 2>/dev/null; then
+                    has_status=1
+                    printf "  │  %-8s %-16s %-8s %-7s %-10s │\n" "$(date '+%H:%M')" "$cip" "..." "[...]" "working"
+                fi
+            done < /var/lib/nfs/rmtab
+        fi
+        if [ $has_status -eq 0 ]; then
+            echo "  │  (waiting for PCs to connect...)                │"
+        fi
+        echo "  └──────────────────────────────────────────────────┘"
+        echo ""
+        echo "  Last update: $(date '+%H:%M:%S')  |  Refresh: 10s"
+        echo "  Press Ctrl+C to stop server."
+
+        sleep 10
     done
 }
