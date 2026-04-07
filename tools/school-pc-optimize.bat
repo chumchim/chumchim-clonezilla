@@ -211,8 +211,20 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTask
 :: Set timezone to Thailand
 tzutil /s "SE Asia Standard Time" >nul 2>&1
 
-:: Set Thai keyboard layout (add alongside English)
-powershell -Command "Set-WinUserLanguageList -LanguageList en-US,th-TH -Force" 2>nul
+:: Set languages: English (US) + Thai
+:: English as display language, Thai keyboard added
+powershell -Command ^
+  "$langs = New-WinUserLanguageList en-US; ^
+   $thai = New-WinUserLanguageList th-TH; ^
+   $langs += $thai[0]; ^
+   Set-WinUserLanguageList $langs -Force" 2>nul
+
+:: Set system locale to Thai (for Thai app support)
+powershell -Command "Set-WinSystemLocale -SystemLocale th-TH" 2>nul
+:: Set region to Thailand
+powershell -Command "Set-WinHomeLocation -GeoId 227" 2>nul
+:: Set date/time format to Thai
+powershell -Command "Set-Culture th-TH" 2>nul
 
 :: Disable USB autoplay (security)
 reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AutoplayHandlers" /v DisableAutoplay /t REG_DWORD /d 1 /f >nul 2>&1
@@ -274,7 +286,8 @@ echo    [Phase 2] Unnecessary services disabled
 echo    [Phase 3] Bloatware apps removed
 echo    [Phase 4] System cleanup + Compact OS enabled
 echo    [Phase 5] School environment configured
-echo              - Thailand timezone + Thai keyboard
+echo              - Languages: English (US) + Thai
+echo              - Thailand timezone, region, date format
 echo              - No lock screen, no ads, no tips
 echo              - Clean taskbar, useful desktop icons
 echo              - USB autoplay disabled (security)
