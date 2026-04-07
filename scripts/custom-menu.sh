@@ -19,17 +19,44 @@ BOOT_USB=""
 
 log() { echo "[$(date '+%H:%M:%S')] $1" >> "$LOG_FILE"; }
 
-# Friendly name for a device (e.g. /dev/sdb3 -> "USB: SanDisk 32GB")
+# Friendly name for a device (single lsblk call)
 friendly_name() {
     local DEV="$1"
     local DISK=$(echo "$DEV" | sed 's/[0-9]*$//;s/p[0-9]*$//')
-    local MODEL=$(lsblk -d -o MODEL "$DISK" 2>/dev/null | tail -1 | sed 's/^ *//;s/ *$//')
-    local DSIZE=$(lsblk -d -o SIZE "$DISK" 2>/dev/null | tail -1 | tr -d ' ')
-    local RM=$(lsblk -d -o RM "$DISK" 2>/dev/null | tail -1 | tr -d ' ')
+    local INFO=$(lsblk -d -n -o MODEL,SIZE,RM "$DISK" 2>/dev/null | head -1)
+    local MODEL=$(echo "$INFO" | awk '{$NF=""; $(NF-1)=""; print}' | sed 's/^ *//;s/ *$//')
+    local DSIZE=$(echo "$INFO" | awk '{print $(NF-1)}')
+    local RM=$(echo "$INFO" | awk '{print $NF}')
     local TYPE="Disk"
     [ "$RM" = "1" ] && TYPE="USB"
     [ "$DISK" = "$BOOT_USB" ] && TYPE="USB Boot"
     echo "$TYPE: $MODEL $DSIZE ($DEV)"
+}
+
+# Calculate used space on a disk (handles unmounted NTFS/NVMe)
+get_src_used_mb() {
+    local DISK="$1"
+    local TOTAL=0
+    for spart in /dev/${DISK}[0-9]* /dev/${DISK}p[0-9]*; do
+        [ -b "$spart" ] || continue
+        mkdir -p /tmp/_scheck
+        mount -o ro "$spart" /tmp/_scheck 2>/dev/null
+        if [ $? -eq 0 ]; then
+            local USED=$(df -m /tmp/_scheck 2>/dev/null | tail -1 | awk '{print $3}')
+            [ -n "$USED" ] && TOTAL=$((TOTAL + USED))
+            umount /tmp/_scheck 2>/dev/null
+        else
+            local PSIZE=$(($(blockdev --getsize64 "$spart" 2>/dev/null) / 1048576))
+            [ -n "$PSIZE" ] && TOTAL=$((TOTAL + PSIZE))
+        fi
+    done
+    rmdir /tmp/_scheck 2>/dev/null
+    echo $TOTAL
+}
+
+# Shutdown with fallbacks
+do_shutdown() {
+    do_shutdown
 }
 
 # ============================================
@@ -119,19 +146,21 @@ select_partition() {
 # ============================================
 select_image() {
     SEL_IMG_NAME=""; SEL_IMG_DEV=""
+    local -a IMG_DEVS=()
+    local -a IMG_NAMES=()
     OPTS=""; IMG_COUNT=0
     for dev in /dev/sd*[0-9]* /dev/nvme*p[0-9]*; do
         mkdir -p /tmp/_sel 2>/dev/null
-        mount $dev /tmp/_sel 2>/dev/null
+        mount $dev /tmp/_sel 2>/dev/null || continue
         for dir in /tmp/_sel/*/; do
             if [ -f "${dir}disk" ] 2>/dev/null || [ -f "${dir}parts" ] 2>/dev/null; then
                 IMG_COUNT=$((IMG_COUNT + 1))
-                NAME=$(basename $dir)
+                NAME=$(basename "$dir")
                 SIZE=$(du -sh "$dir" 2>/dev/null | cut -f1)
-                NOTE=""; [ -f "/tmp/_sel/.note_${NAME}" ] && NOTE=" - $(cat /tmp/_sel/.note_${NAME})"
+                NOTE=""; [ -f "/tmp/_sel/.note_${NAME}" ] && NOTE=" - $(cat "/tmp/_sel/.note_${NAME}")"
                 OPTS="$OPTS $IMG_COUNT \"$NAME ($SIZE)$NOTE\""
-                eval "SSEL_DEV_$IMG_COUNT=$dev"
-                eval "SSEL_NAME_$IMG_COUNT=$NAME"
+                IMG_DEVS[$IMG_COUNT]="$dev"
+                IMG_NAMES[$IMG_COUNT]="$NAME"
             fi
         done
         umount /tmp/_sel 2>/dev/null
@@ -139,8 +168,8 @@ select_image() {
     [ $IMG_COUNT -eq 0 ] && { dialog --msgbox "No images found!\n\nClone a PC first." 8 40; return 1; }
     RESULT=$(eval "dialog --title \"Select Image\" --menu \"\" 15 70 6 $OPTS" 3>&1 1>&2 2>&3)
     [ $? -ne 0 ] && return 1
-    eval "SEL_IMG_DEV=\$SSEL_DEV_$RESULT"
-    eval "SEL_IMG_NAME=\$SSEL_NAME_$RESULT"
+    SEL_IMG_DEV="${IMG_DEVS[$RESULT]}"
+    SEL_IMG_NAME="${IMG_NAMES[$RESULT]}"
     return 0
 }
 
@@ -259,27 +288,10 @@ clone_auto_detect() {
         rm -rf "/home/partimag/$IMG_NAME"
     fi
 
-    # Check free space (use lsblk for unmounted partitions)
+    # Check free space
     SAVE_FREE_MB=$(df -m /home/partimag 2>/dev/null | tail -1 | awk '{print $4}')
     [ -z "$SAVE_FREE_MB" ] && SAVE_FREE_MB=0
-
-    # Get source used space: try mount temporarily, fall back to partition size
-    SRC_USED_MB=0
-    for spart in /dev/${SRC}[0-9]* /dev/${SRC}p[0-9]*; do
-        [ -b "$spart" ] || continue
-        mkdir -p /tmp/_srccheck
-        mount -o ro "$spart" /tmp/_srccheck 2>/dev/null
-        if [ $? -eq 0 ]; then
-            USED=$(df -m /tmp/_srccheck 2>/dev/null | tail -1 | awk '{print $3}')
-            [ -n "$USED" ] && SRC_USED_MB=$((SRC_USED_MB + USED))
-            umount /tmp/_srccheck 2>/dev/null
-        else
-            # Can't mount: estimate from partition size
-            PSIZE=$(($(blockdev --getsize64 "$spart" 2>/dev/null) / 1048576))
-            [ -n "$PSIZE" ] && SRC_USED_MB=$((SRC_USED_MB + PSIZE))
-        fi
-    done
-    rmdir /tmp/_srccheck 2>/dev/null
+    SRC_USED_MB=$(get_src_used_mb "$SRC")
 
     SAVE_FREE_GB=$((SAVE_FREE_MB / 1024))
     SRC_USED_GB=$((SRC_USED_MB / 1024))
@@ -358,24 +370,10 @@ clone_manual_select() {
     mkdir -p /home/partimag
     mount $SAVE_DEV /home/partimag 2>/dev/null || { dialog --msgbox "Cannot mount $SAVE_DEV" 6 40; return 1; }
 
-    # Check free space (temp mount for unmounted NTFS partitions)
+    # Check free space
     SAVE_FREE_MB=$(df -m /home/partimag 2>/dev/null | tail -1 | awk '{print $4}')
-    SRC_USED_MB=0
-    for spart in /dev/${SRC}[0-9]* /dev/${SRC}p[0-9]*; do
-        [ -b "$spart" ] || continue
-        mkdir -p /tmp/_mcheck
-        mount -o ro "$spart" /tmp/_mcheck 2>/dev/null
-        if [ $? -eq 0 ]; then
-            USED=$(df -m /tmp/_mcheck 2>/dev/null | tail -1 | awk '{print $3}')
-            [ -n "$USED" ] && SRC_USED_MB=$((SRC_USED_MB + USED))
-            umount /tmp/_mcheck 2>/dev/null
-        else
-            PSIZE=$(($(blockdev --getsize64 "$spart" 2>/dev/null) / 1048576))
-            [ -n "$PSIZE" ] && SRC_USED_MB=$((SRC_USED_MB + PSIZE))
-        fi
-    done
-    rmdir /tmp/_mcheck 2>/dev/null
     [ -z "$SAVE_FREE_MB" ] && SAVE_FREE_MB=0
+    SRC_USED_MB=$(get_src_used_mb "$SRC")
     SAVE_FREE_GB=$((SAVE_FREE_MB / 1024))
     SRC_USED_GB=$((SRC_USED_MB / 1024))
     EST_IMAGE_GB=$((SRC_USED_MB * 40 / 100 / 1024))
@@ -478,7 +476,7 @@ do_clone() {
 
     umount /home/partimag 2>/dev/null
 
-    dialog --yesno "Shutdown?" 6 30 && { sync; shutdown -h now 2>/dev/null || poweroff 2>/dev/null || halt 2>/dev/null || echo o > /proc/sysrq-trigger; }
+    do_shutdown
 }
 
 # ============================================
@@ -765,7 +763,7 @@ show_splash() {
     Based on Clonezilla\n\
     github.com/chumchim\n\n\
     Loading..." 14 45
-    sleep 3
+    sleep 1
 }
 
 # ============================================
@@ -791,7 +789,7 @@ while true; do
         3) do_multicast 2>/dev/null || dialog --msgbox "Multicast not ready.\nUse USB method instead." 8 40 ;;
         4) do_manage ;;
         5) show_help ;;
-        0) dialog --yesno "Shutdown?" 6 30 && { sync; shutdown -h now 2>/dev/null || poweroff 2>/dev/null || halt 2>/dev/null || echo o > /proc/sysrq-trigger; } ;;
+        0) do_shutdown ;;
         *) continue ;;
     esac
 done

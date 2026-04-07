@@ -45,19 +45,27 @@ chmod 0440 $WORK/squashfs/etc/sudoers.d/chumchim
 # Auto-create data partition on boot USB if unallocated space exists
 cat > $WORK/squashfs/usr/local/bin/auto-partition.sh << 'PARTEOF'
 #!/bin/bash
-# Find the boot USB device
+# Find the boot USB device by label or by scanning
 BOOT_DEV=""
-for dev in /dev/sd*[0-9]* /dev/nvme*p[0-9]*; do
-    mkdir -p /tmp/_bp 2>/dev/null
-    mount -o ro "$dev" /tmp/_bp 2>/dev/null || continue
-    if [ -d "/tmp/_bp/live" ] || [ -f "/tmp/_bp/live/filesystem.squashfs" ] || [ -f "/tmp/_bp/filesystem.squashfs" ]; then
-        BOOT_DEV=$(echo "$dev" | sed 's/[0-9]*$//;s/p[0-9]*$//')
+# Try label first (fast)
+LABEL_DEV=$(blkid -L "ChumChimV3" 2>/dev/null)
+if [ -n "$LABEL_DEV" ]; then
+    BOOT_DEV=$(echo "$LABEL_DEV" | sed 's/[0-9]*$//;s/p[0-9]*$//')
+else
+    # Fallback: scan for /live directory
+    for dev in /dev/sd*[0-9]* /dev/nvme*p[0-9]*; do
+        [ -b "$dev" ] || continue
+        mkdir -p /tmp/_bp 2>/dev/null
+        mount -o ro "$dev" /tmp/_bp 2>/dev/null || continue
+        if [ -d "/tmp/_bp/live" ]; then
+            BOOT_DEV=$(echo "$dev" | sed 's/[0-9]*$//;s/p[0-9]*$//')
+            umount /tmp/_bp 2>/dev/null
+            break
+        fi
         umount /tmp/_bp 2>/dev/null
-        break
-    fi
-    umount /tmp/_bp 2>/dev/null
-done
-rmdir /tmp/_bp 2>/dev/null
+    done
+    rmdir /tmp/_bp 2>/dev/null
+fi
 [ -z "$BOOT_DEV" ] && exit 0
 
 # Check if there's unallocated space (>1GB) on boot USB
@@ -159,7 +167,7 @@ echo "  OK"
 
 echo "[6/6] Repacking ISO..."
 rm $WORK/iso/live/filesystem.squashfs
-mksquashfs $WORK/squashfs $WORK/iso/live/filesystem.squashfs -comp xz -quiet
+mksquashfs $WORK/squashfs $WORK/iso/live/filesystem.squashfs -comp zstd -Xcompression-level 3 -quiet
 
 rm -f $OUTPUT
 xorriso -as mkisofs \
