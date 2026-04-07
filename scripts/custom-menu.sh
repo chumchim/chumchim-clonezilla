@@ -411,7 +411,7 @@ do_install() {
     echo ""
     log "Install $IMG_NAME -> /dev/$TGT ($PART_COUNT partitions)"
 
-    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -nogui -j2 -sc -p true restoredisk "$IMG_NAME" "$TGT" 2>&1 | tee -a "$LOG_FILE"
+    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -icds -k1 -nogui -j2 -sc -p true restoredisk "$IMG_NAME" "$TGT" 2>&1 | tee -a "$LOG_FILE"
     OCS_RC=${PIPESTATUS[0]}
 
     if [ $OCS_RC -eq 0 ]; then
@@ -669,7 +669,7 @@ do_pxe_auto_install() {
     echo ""
     log "PXE Install $img_name -> /dev/$tgt ($part_count partitions)"
 
-    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -nogui -j2 -sc -p true restoredisk "$img_name" "$tgt" 2>&1 | tee -a "$LOG_FILE"
+    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -icds -k1 -nogui -j2 -sc -p true restoredisk "$img_name" "$tgt" 2>&1 | tee -a "$LOG_FILE"
     local rc=${PIPESTATUS[0]}
 
     local my_ip=$(ip -4 addr show 2>/dev/null | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -1)

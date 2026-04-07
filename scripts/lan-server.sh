@@ -554,6 +554,52 @@ do_lan_server() {
     rpc.nfsd 8 2>/dev/null
     rpc.mountd 2>/dev/null
     exportfs -ra 2>/dev/null
+
+    # Test NFS export actually works (FUSE/NTFS may fail)
+    local nfs_ok=0
+    exportfs -v 2>/dev/null | grep -q "$LAN_NFS_PATH" && nfs_ok=1
+
+    if [ "$nfs_ok" = "0" ]; then
+        echo "         WARNING: NFS export failed (NTFS/FUSE not supported)"
+        echo "         Creating ext4 partition for NFS..."
+        umount "$LAN_NFS_PATH" 2>/dev/null
+
+        # Find unallocated space or shrink existing partition
+        local avail_part=""
+        for pname in $(lsblk -l -o NAME "/dev/$LAN_DISK" 2>/dev/null | tail -n +2 | grep -v "^${LAN_DISK}$"); do
+            local fs=$(blkid -o value -s TYPE "/dev/$pname" 2>/dev/null)
+            if [ -z "$fs" ]; then
+                avail_part="$pname"; break  # Unformatted partition
+            fi
+        done
+
+        if [ -z "$avail_part" ]; then
+            # Create new partition from unallocated space
+            echo "         Creating new partition..."
+            echo -e "n\n\n\n\nw" | fdisk "/dev/$LAN_DISK" >/dev/null 2>&1
+            sleep 2
+            partprobe "/dev/$LAN_DISK" 2>/dev/null
+            sleep 1
+            # Find the new partition (last one)
+            avail_part=$(lsblk -l -o NAME "/dev/$LAN_DISK" 2>/dev/null | tail -1)
+        fi
+
+        if [ -n "$avail_part" ]; then
+            echo "         Formatting /dev/$avail_part as ext4..."
+            mkfs.ext4 -F -L "ChumChim-LAN" "/dev/$avail_part" >/dev/null 2>&1
+            mount "/dev/$avail_part" "$LAN_NFS_PATH" 2>/dev/null
+
+            # Re-export
+            exportfs -ra 2>/dev/null
+            exportfs -v 2>/dev/null | grep -q "$LAN_NFS_PATH" && nfs_ok=1
+        fi
+
+        if [ "$nfs_ok" = "0" ]; then
+            echo "         NFS STILL FAILED!"
+            dialog --msgbox "Cannot start NFS server!\n\nNTFS disk not supported for NFS.\nNeed ext4 partition or different disk." 10 55
+            return
+        fi
+    fi
     echo "         NFS: OK"
 
     # Start beacon
