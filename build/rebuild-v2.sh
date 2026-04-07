@@ -20,14 +20,15 @@ umount /mnt/cdrom
 echo "[2/7] Extracting squashfs..."
 unsquashfs -d $WORK/squashfs $WORK/iso/live/filesystem.squashfs > /dev/null 2>&1
 
-echo "[3/7] Installing LAN packages..."
+echo "[3/7] Installing LAN + PXE packages..."
 mount --bind /dev $WORK/squashfs/dev
 mount --bind /proc $WORK/squashfs/proc
 mount --bind /sys $WORK/squashfs/sys
 cp /etc/resolv.conf $WORK/squashfs/etc/resolv.conf
 chroot $WORK/squashfs bash -c "
 apt-get update -qq 2>/dev/null
-apt-get install -y -qq socat nfs-kernel-server openssh-server 2>/dev/null
+apt-get install -y -qq socat nfs-kernel-server openssh-server dnsmasq pxelinux syslinux-common syslinux-efi grub-efi-amd64-bin 2>/dev/null
+systemctl disable dnsmasq 2>/dev/null || true
 " 2>&1 | tail -3
 umount $WORK/squashfs/sys
 umount $WORK/squashfs/proc

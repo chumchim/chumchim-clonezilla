@@ -12,6 +12,8 @@ LAN_IF=""
 LAN_IP=""
 LAN_SERVER_IP=""
 LAN_DISK=""
+PXE_TFTP_ROOT="/srv/tftp"
+PXE_NFS_LIVE="/srv/chumchim-live"
 
 lan_log() { echo "[$(date '+%H:%M:%S')] $1" >> "$LAN_LOG"; }
 
@@ -174,6 +176,233 @@ lan_select_nfs_image() {
 }
 
 # ============================================
+# SERVER: Setup PXE boot (BIOS + UEFI)
+# ============================================
+pxe_setup_tftp() {
+    lan_log "Setting up TFTP boot files..."
+    mkdir -p "$PXE_TFTP_ROOT/bios" "$PXE_TFTP_ROOT/efi64"
+
+    # --- BIOS: pxelinux ---
+    local pxelinux_path=""
+    for p in /usr/lib/PXELINUX/pxelinux.0 /usr/share/syslinux/pxelinux.0; do
+        [ -f "$p" ] && { pxelinux_path="$p"; break; }
+    done
+    if [ -n "$pxelinux_path" ]; then
+        cp "$pxelinux_path" "$PXE_TFTP_ROOT/bios/"
+        # Copy required syslinux modules
+        for mod in ldlinux.c32 menu.c32 vesamenu.c32 libutil.c32 libcom32.c32; do
+            for d in /usr/lib/syslinux/modules/bios /usr/share/syslinux; do
+                [ -f "$d/$mod" ] && { cp "$d/$mod" "$PXE_TFTP_ROOT/bios/"; break; }
+            done
+        done
+        lan_log "BIOS PXE files ready"
+    else
+        lan_log "WARNING: pxelinux.0 not found — BIOS PXE disabled"
+    fi
+
+    # --- UEFI: grub-efi ---
+    local grub_efi=""
+    for p in /usr/lib/grub/x86_64-efi /usr/share/grub/x86_64-efi; do
+        [ -d "$p" ] && { grub_efi="$p"; break; }
+    done
+    if [ -n "$grub_efi" ]; then
+        grub-mknetdir --net-directory="$PXE_TFTP_ROOT/efi64" --subdir="" 2>/dev/null || \
+        grub-mkimage -O x86_64-efi -o "$PXE_TFTP_ROOT/efi64/bootx64.efi" \
+            -p "(tftp)/" \
+            efinet tftp linux normal configfile 2>/dev/null
+        lan_log "UEFI PXE files ready"
+    else
+        lan_log "WARNING: grub x86_64-efi modules not found — UEFI PXE disabled"
+    fi
+
+    # --- Copy kernel + initrd from running live system ---
+    if [ -f /live/vmlinuz ] && [ -f /live/initrd.img ]; then
+        cp /live/vmlinuz "$PXE_TFTP_ROOT/"
+        cp /live/initrd.img "$PXE_TFTP_ROOT/"
+    elif [ -f /boot/vmlinuz ] && [ -f /boot/initrd.img ]; then
+        cp /boot/vmlinuz "$PXE_TFTP_ROOT/"
+        cp /boot/initrd.img "$PXE_TFTP_ROOT/"
+    else
+        # Try to extract from ISO mount
+        for mnt in /run/live/medium /lib/live/mount/medium /cdrom; do
+            if [ -f "$mnt/live/vmlinuz" ]; then
+                cp "$mnt/live/vmlinuz" "$PXE_TFTP_ROOT/"
+                cp "$mnt/live/initrd.img" "$PXE_TFTP_ROOT/"
+                break
+            fi
+        done
+    fi
+
+    if [ ! -f "$PXE_TFTP_ROOT/vmlinuz" ]; then
+        lan_log "ERROR: vmlinuz not found for PXE"
+        return 1
+    fi
+
+    # --- BIOS pxelinux config ---
+    mkdir -p "$PXE_TFTP_ROOT/bios/pxelinux.cfg"
+    cat > "$PXE_TFTP_ROOT/bios/pxelinux.cfg/default" << PXECFG
+DEFAULT chumchim
+PROMPT 0
+TIMEOUT 30
+LABEL chumchim
+  MENU LABEL ChumChim-Clonezilla (PXE)
+  KERNEL tftp://${LAN_IP}/vmlinuz
+  APPEND initrd=tftp://${LAN_IP}/initrd.img boot=live netboot=nfs nfsroot=${LAN_IP}:${PXE_NFS_LIVE} union=overlay username=user locales=en_US.UTF-8 keyboard-layouts=us chumchim_server=${LAN_IP} chumchim_pxe=1
+PXECFG
+
+    # --- UEFI grub config ---
+    cat > "$PXE_TFTP_ROOT/efi64/grub.cfg" << GRUBCFG
+set default=0
+set timeout=3
+menuentry "ChumChim-Clonezilla (PXE)" {
+  linux tftp://${LAN_IP}/vmlinuz boot=live netboot=nfs nfsroot=${LAN_IP}:${PXE_NFS_LIVE} union=overlay username=user locales=en_US.UTF-8 keyboard-layouts=us chumchim_server=${LAN_IP} chumchim_pxe=1
+  initrd tftp://${LAN_IP}/initrd.img
+}
+GRUBCFG
+
+    lan_log "TFTP boot configs written (server=$LAN_IP)"
+    return 0
+}
+
+# ============================================
+# SERVER: Export live filesystem via NFS
+# ============================================
+pxe_export_live_nfs() {
+    lan_log "Exporting live filesystem for PXE clients..."
+    mkdir -p "$PXE_NFS_LIVE"
+
+    # Find the squashfs / live mount
+    local live_root=""
+    for mnt in /run/live/rootfs /lib/live/mount/rootfs; do
+        if [ -d "$mnt" ] && ls "$mnt"/*.squashfs >/dev/null 2>&1; then
+            live_root="$mnt"
+            break
+        fi
+    done
+
+    if [ -z "$live_root" ]; then
+        # Fallback: mount the squashfs from ISO medium
+        local medium=""
+        for m in /run/live/medium /lib/live/mount/medium /cdrom; do
+            [ -f "$m/live/filesystem.squashfs" ] && { medium="$m"; break; }
+        done
+        if [ -n "$medium" ]; then
+            # Create a read-only bind of the entire live medium
+            mount --bind "$medium" "$PXE_NFS_LIVE" 2>/dev/null
+            lan_log "Bound live medium $medium -> $PXE_NFS_LIVE"
+        else
+            lan_log "ERROR: Cannot find live filesystem for PXE export"
+            return 1
+        fi
+    else
+        # Bind the rootfs directory (contains squashfs files)
+        mount --bind "$live_root" "$PXE_NFS_LIVE" 2>/dev/null
+        lan_log "Bound live rootfs $live_root -> $PXE_NFS_LIVE"
+    fi
+
+    # Also try binding the full medium for live boot
+    local medium=""
+    for m in /run/live/medium /lib/live/mount/medium /cdrom; do
+        [ -d "$m/live" ] && { medium="$m"; break; }
+    done
+    if [ -n "$medium" ]; then
+        umount "$PXE_NFS_LIVE" 2>/dev/null
+        mount --bind "$medium" "$PXE_NFS_LIVE" 2>/dev/null
+        lan_log "Bound full medium $medium -> $PXE_NFS_LIVE"
+    fi
+
+    return 0
+}
+
+# ============================================
+# SERVER: Start dnsmasq as ProxyDHCP + TFTP
+# ============================================
+pxe_start_dnsmasq() {
+    lan_log "Starting dnsmasq (ProxyDHCP + TFTP)..."
+
+    # Kill any existing dnsmasq
+    killall dnsmasq 2>/dev/null
+    sleep 1
+
+    # Detect UEFI boot file
+    local uefi_file=""
+    if [ -f "$PXE_TFTP_ROOT/efi64/bootx64.efi" ]; then
+        uefi_file="efi64/bootx64.efi"
+    elif [ -f "$PXE_TFTP_ROOT/efi64/boot/grub/x86_64-efi/core.efi" ]; then
+        uefi_file="efi64/boot/grub/x86_64-efi/core.efi"
+    fi
+
+    # Detect if DHCP exists on network
+    local has_dhcp=0
+    timeout 3 dhclient -1 -timeout 3 "$LAN_IF" 2>/dev/null && has_dhcp=1
+    # Release immediately if we got one
+    dhclient -r "$LAN_IF" 2>/dev/null
+    # Re-assign our static IP
+    ip addr add ${LAN_IP}/24 broadcast 192.168.77.255 dev "$LAN_IF" 2>/dev/null
+
+    # Calculate DHCP range (server IP is .X, clients get .100-.200)
+    local subnet=$(echo $LAN_IP | cut -d. -f1-3)
+
+    if [ "$has_dhcp" = "1" ]; then
+        lan_log "Existing DHCP detected — using ProxyDHCP mode"
+        cat > /tmp/dnsmasq-pxe.conf << DNSMASQCFG
+# ProxyDHCP mode (existing DHCP on network)
+port=0
+interface=${LAN_IF}
+bind-interfaces
+dhcp-range=${LAN_IP},proxy
+dhcp-no-override
+DNSMASQCFG
+    else
+        lan_log "No DHCP detected — running full DHCP + PXE"
+        cat > /tmp/dnsmasq-pxe.conf << DNSMASQCFG
+# Full DHCP mode (no existing DHCP)
+interface=${LAN_IF}
+bind-interfaces
+dhcp-range=${subnet}.100,${subnet}.200,255.255.255.0,1h
+dhcp-option=option:router,${LAN_IP}
+DNSMASQCFG
+    fi
+
+    # Append PXE boot options (same for both modes)
+    cat >> /tmp/dnsmasq-pxe.conf << DNSMASQCFG
+
+# BIOS clients (arch 0)
+dhcp-match=set:bios,option:client-arch,0
+dhcp-boot=tag:bios,bios/pxelinux.0,,${LAN_IP}
+
+# UEFI clients (arch 7,9)
+dhcp-match=set:efi64,option:client-arch,7
+dhcp-match=set:efi64-2,option:client-arch,9
+dhcp-boot=tag:efi64,${uefi_file},,${LAN_IP}
+dhcp-boot=tag:efi64-2,${uefi_file},,${LAN_IP}
+
+# PXE service
+pxe-service=x86PC,"ChumChim PXE",bios/pxelinux,${LAN_IP}
+pxe-service=x86-64_EFI,"ChumChim PXE",${uefi_file},${LAN_IP}
+
+# TFTP server
+enable-tftp
+tftp-root=${PXE_TFTP_ROOT}
+tftp-no-blocksize
+
+# Logging
+log-dhcp
+log-facility=/tmp/dnsmasq-pxe.log
+DNSMASQCFG
+
+    dnsmasq --conf-file=/tmp/dnsmasq-pxe.conf 2>>/tmp/dnsmasq-pxe.log
+    local rc=$?
+    if [ $rc -eq 0 ]; then
+        lan_log "dnsmasq started (ProxyDHCP on $LAN_IF, TFTP on $PXE_TFTP_ROOT)"
+    else
+        lan_log "ERROR: dnsmasq failed to start (rc=$rc)"
+        return 1
+    fi
+    return 0
+}
+
+# ============================================
 # SERVER: Main function
 # ============================================
 do_lan_server() {
@@ -185,7 +414,7 @@ do_lan_server() {
     echo ""
 
     # Step 1: Network
-    echo "  [1/4] Setting up network..."
+    echo "  [1/5] Setting up network..."
     lan_get_ip server
     if [ -z "$LAN_IP" ]; then
         dialog --msgbox "No network!\n\nConnect LAN cable and try again." 8 45
@@ -194,7 +423,7 @@ do_lan_server() {
     echo "         IP: $LAN_IP ($LAN_IF)"
 
     # Step 2: Find disk
-    echo "  [2/4] Finding storage disk..."
+    echo "  [2/5] Finding storage disk..."
     LAN_DISK=""
     local max_size=0
     for dname in $(lsblk -d -o NAME,TYPE | grep "disk" | awk '{print $1}'); do
@@ -214,7 +443,7 @@ do_lan_server() {
     echo "         Disk: /dev/$LAN_DISK ($disk_gb GB) $disk_model"
 
     # Step 3: Prepare storage
-    echo "  [3/4] Preparing storage..."
+    echo "  [3/5] Preparing storage..."
     mkdir -p "$LAN_NFS_PATH"
 
     # Find or create ext4 partition
@@ -256,7 +485,7 @@ do_lan_server() {
     echo "         Storage: $free free"
 
     # Step 4: Start NFS + beacon
-    echo "  [4/4] Starting NFS server..."
+    echo "  [4/5] Starting NFS server..."
     echo "$LAN_NFS_PATH *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=1)" > /etc/exports
     rpcbind 2>/dev/null
     rpc.nfsd 8 2>/dev/null
@@ -275,12 +504,38 @@ do_lan_server() {
     ) &
     echo "         Beacon: broadcasting on $bcast:$LAN_PORT"
 
+    # Step 5: PXE Boot Server
+    echo "  [5/5] Starting PXE Boot Server..."
+    local pxe_status="OFF"
+    if command -v dnsmasq >/dev/null 2>&1; then
+        # Export live filesystem for PXE clients
+        pxe_export_live_nfs
+        # Add NFS export for live filesystem
+        echo "$PXE_NFS_LIVE *(ro,sync,no_subtree_check,no_root_squash,insecure,fsid=2)" >> /etc/exports
+        exportfs -ra 2>/dev/null
+
+        # Setup TFTP boot files
+        pxe_setup_tftp
+        # Start dnsmasq ProxyDHCP + TFTP
+        if pxe_start_dnsmasq; then
+            pxe_status="ON"
+            echo "         PXE: BIOS + UEFI ready"
+        else
+            echo "         PXE: FAILED (see /tmp/dnsmasq-pxe.log)"
+        fi
+    else
+        echo "         PXE: skipped (dnsmasq not installed)"
+    fi
+
     # Dashboard loop — refresh every 10 seconds
     while true; do
         clear
         local free=$(df -h "$LAN_NFS_PATH" 2>/dev/null | tail -1 | awk '{print $4}')
         local used=$(df -h "$LAN_NFS_PATH" 2>/dev/null | tail -1 | awk '{print $3}')
         local clients=$(cat /var/lib/nfs/rmtab 2>/dev/null | wc -l)
+
+        local pxe_clients=0
+        [ -f /tmp/dnsmasq-pxe.log ] && pxe_clients=$(grep -c "DHCPACK" /tmp/dnsmasq-pxe.log 2>/dev/null)
 
         echo ""
         echo "  ╔══════════════════════════════════════════╗"
@@ -290,10 +545,11 @@ do_lan_server() {
         echo "  Server IP:    $LAN_IP"
         echo "  Disk:         /dev/$LAN_DISK ($disk_gb GB) $disk_model"
         echo "  Storage:      $used used / $free free"
-        echo "  Connected:    $clients PC(s)"
+        echo "  NFS Clients:  $clients PC(s)"
+        echo "  PXE Boot:     $pxe_status (BIOS+UEFI) | $pxe_clients boot(s)"
         echo ""
-        echo "  Other PCs: just select Clone or Install"
-        echo "  They will find this server automatically."
+        echo "  USB PCs:  select Clone or Install (auto-find server)"
+        echo "  PXE PCs:  set BIOS to 'Network Boot' -> auto-install"
         echo ""
 
         # Image table

@@ -562,9 +562,152 @@ show_splash() {
 }
 
 # ============================================
+# PXE AUTO-INSTALL (client booted via PXE)
+# ============================================
+do_pxe_auto_install() {
+    # Read server IP from kernel cmdline
+    local server_ip=$(cat /proc/cmdline | tr ' ' '\n' | grep "chumchim_server=" | cut -d= -f2)
+    [ -z "$server_ip" ] && return 1
+
+    clear
+    echo ""
+    echo "  ============================================"
+    echo "    ChumChim PXE Client — Auto Install"
+    echo "    Server: $server_ip"
+    echo "  ============================================"
+    echo ""
+
+    # Mount NFS image share
+    echo "  [1/3] Connecting to server..."
+    mkdir -p /home/partimag
+    mount -t nfs -o rsize=65536,wsize=65536,nolock,vers=3 \
+        "${server_ip}:/srv/chumchim" /home/partimag 2>/dev/null
+    if [ $? -ne 0 ]; then
+        mount -t nfs "${server_ip}:/srv/chumchim" /home/partimag 2>/dev/null
+    fi
+    if [ $? -ne 0 ]; then
+        echo "  [X] Cannot connect to server NFS!"
+        echo "  Falling back to menu..."
+        sleep 3
+        return 1
+    fi
+    echo "         Connected to $server_ip"
+
+    # Find images
+    echo "  [2/3] Finding images..."
+    local img_count=0
+    local img_name=""
+    for dir in /home/partimag/*/; do
+        if [ -f "${dir}disk" ] 2>/dev/null || [ -f "${dir}parts" ] 2>/dev/null; then
+            img_count=$((img_count + 1))
+            img_name=$(basename "$dir")
+        fi
+    done
+
+    if [ $img_count -eq 0 ]; then
+        echo "  [X] No images on server! Clone a PC first."
+        umount /home/partimag 2>/dev/null
+        sleep 3
+        return 1
+    fi
+
+    # If multiple images, let user pick (or auto if just 1)
+    if [ $img_count -gt 1 ]; then
+        if type lan_select_nfs_image >/dev/null 2>&1; then
+            lan_select_nfs_image || { umount /home/partimag 2>/dev/null; return 1; }
+            img_name=$SEL_IMG_NAME
+        fi
+    fi
+    echo "         Image: $img_name"
+
+    # Find target disk (largest non-removable)
+    echo "  [3/3] Finding target disk..."
+    local tgt=""
+    local tgt_size=0
+    for dname in $(lsblk -d -o NAME,TYPE | grep "disk" | awk '{print $1}'); do
+        local rm=$(lsblk -d -o RM /dev/$dname 2>/dev/null | tail -1 | tr -d ' ')
+        [ "$rm" = "1" ] && continue
+        local sz=$(blockdev --getsize64 /dev/$dname 2>/dev/null)
+        [ -z "$sz" ] && continue
+        if [ "$sz" -gt "$tgt_size" ]; then
+            tgt_size=$sz
+            tgt=$dname
+        fi
+    done
+
+    if [ -z "$tgt" ]; then
+        echo "  [X] No target disk found!"
+        umount /home/partimag 2>/dev/null
+        sleep 3
+        return 1
+    fi
+
+    local tgt_gb=$((tgt_size / 1073741824))
+    local tgt_model=$(lsblk -d -o MODEL /dev/$tgt 2>/dev/null | tail -1)
+    echo "         Target: /dev/$tgt ($tgt_gb GB) $tgt_model"
+
+    # Confirm (short timeout — auto-proceed if no input)
+    echo ""
+    echo "  *** INSTALLING $img_name -> /dev/$tgt ***"
+    echo "  *** ALL DATA ON /dev/$tgt WILL BE ERASED ***"
+    echo ""
+    echo "  Starting in 10 seconds... (Ctrl+C to cancel)"
+    sleep 10
+
+    # Install
+    local part_count=0
+    [ -f "/home/partimag/$img_name/parts" ] && part_count=$(wc -w < "/home/partimag/$img_name/parts")
+
+    clear
+    echo ""
+    echo "  ============================================"
+    echo "    PXE INSTALLING: $img_name"
+    echo "    Target: /dev/$tgt ($tgt_gb GB)"
+    echo "    Partitions: $part_count"
+    echo "    DO NOT turn off!"
+    echo "  ============================================"
+    echo ""
+    log "PXE Install $img_name -> /dev/$tgt ($part_count partitions)"
+
+    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -nogui -j2 -sc -p true restoredisk "$img_name" "$tgt" 2>&1 | tee -a "$LOG_FILE"
+    local rc=${PIPESTATUS[0]}
+
+    local my_ip=$(ip -4 addr show 2>/dev/null | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -1)
+    if [ $rc -eq 0 ]; then
+        log "PXE Install OK: $img_name -> /dev/$tgt"
+        echo "$(date '+%H:%M:%S')|$my_ip|PXE-INST|OK|$img_name|$tgt" >> /home/partimag/.client_status 2>/dev/null
+        echo ""
+        echo "  ============================================"
+        echo "    INSTALL COMPLETE!"
+        echo "    Change BIOS back to 'Disk Boot'"
+        echo "    Shutting down in 15 seconds..."
+        echo "  ============================================"
+        sleep 15
+    else
+        log "PXE Install FAILED: $img_name -> /dev/$tgt"
+        echo "$(date '+%H:%M:%S')|$my_ip|PXE-INST|FAILED|$img_name|$tgt" >> /home/partimag/.client_status 2>/dev/null
+        echo ""
+        echo "  [X] INSTALL FAILED! Check server logs."
+        sleep 30
+    fi
+
+    umount /home/partimag 2>/dev/null
+    sync
+    shutdown -h now 2>/dev/null || poweroff 2>/dev/null
+    exit 0
+}
+
+# ============================================
 # MAIN
 # ============================================
 find_boot_usb
+
+# Check if booted via PXE (kernel cmdline has chumchim_pxe=1)
+if grep -q "chumchim_pxe=1" /proc/cmdline 2>/dev/null; then
+    do_pxe_auto_install
+    # If auto-install fails, fall through to normal menu
+fi
+
 show_splash
 
 while true; do

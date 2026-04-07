@@ -1,0 +1,115 @@
+============================================================
+  School PC Image — Windows 10 LTSC + Office
+  คู่มือการใช้งาน Image สำหรับห้องเรียน
+============================================================
+
+Image ประกอบด้วย:
+  - Windows 10 Enterprise LTSC 2021 (เบา เร็ว เหมาะเครื่องเก่า)
+  - Microsoft Office (Word, Excel, PowerPoint) ไทย+English
+  - Optimize สำหรับห้องเรียน (ปิด Update, Defender, Telemetry)
+  - UWF (Unified Write Filter) แช่เครื่อง
+  - ภาษาไทย + English, timezone ไทย
+  - Auto-login เป็น Student (ไม่มี password)
+  - Auto-activate Windows หลังติดตั้ง
+
+============================================================
+รหัสผ่าน
+============================================================
+  User: Student           Password: (ไม่มี, login อัตโนมัติ)
+  Teacher Admin Tools:    Password: teacher
+
+============================================================
+วิธีติดตั้งลงเครื่องจริง
+============================================================
+
+วิธี A: ผ่าน LAN (เร็วสุด, แนะนำ)
+  1. เตรียม USB Boot 2 ตัว (Rufus + chumchim-clonezilla.iso)
+  2. เครื่อง B (เก็บ image): Boot USB > เลือก "3 LAN Server"
+  3. Copy image ไปเครื่อง B ก่อน (ถ้ายังไม่มี)
+  4. เครื่อง C,D,E: Boot USB > เลือก "2 Install to PC" > Auto
+  5. ระบบหา LAN Server อัตโนมัติ > Install ~4-10 นาที
+  6. เสร็จ > ถอด USB > Restart > พร้อมใช้งาน
+
+วิธี B: ผ่าน USB/External HDD
+  1. เตรียม USB Boot + USB/HDD ที่มี image
+  2. เสียบทั้ง 2 ตัว > Boot จาก USB Boot
+  3. เลือก "2 Install to PC" > Auto
+  4. รอ ~10-20 นาที > เสร็จ > ถอด USB > Restart
+
+============================================================
+สำหรับอาจารย์: แช่เครื่อง (UWF)
+============================================================
+
+แช่เครื่อง = เด็กใช้อะไรก็ได้ พอ restart กลับเดิมหมด
+
+  เปิดแช่ (Freeze):
+  1. ดับเบิลคลิก "System Settings" บน Desktop
+  2. ใส่รหัส: teacher
+  3. เลือก 1 (Freeze PC)
+  4. เครื่อง restart > แช่แล้ว
+
+  ปิดแช่ (Unfreeze) เพื่อลงโปรแกรมเพิ่ม:
+  1. ดับเบิลคลิก "System Settings" บน Desktop
+  2. ใส่รหัส: teacher
+  3. เลือก 2 (Unfreeze PC)
+  4. เครื่อง restart > ลงโปรแกรมได้
+  5. ลงเสร็จแล้ว > Freeze กลับ
+
+============================================================
+ข้อมูลเทคนิค
+============================================================
+
+  OS:           Windows 10 Enterprise LTSC 2021
+  Architecture: x64
+  Office:       Microsoft 365 (Word, Excel, PowerPoint)
+  Languages:    English (US) + Thai
+  Timezone:     SE Asia Standard Time (UTC+7)
+  User:         Student (Administrator, no password)
+  Auto-login:   Yes
+
+  Services ที่ปิด:
+  - Windows Update
+  - Windows Defender (real-time)
+  - Search Indexing
+  - Telemetry/Diagnostics
+  - Xbox services
+  - Cortana/Copilot
+
+  Desktop:
+  - Word, Excel, PowerPoint shortcuts
+  - System Settings (teacher tools, password: teacher)
+
+  Teacher Tools (C:\AdminTools, hidden):
+  - teacher-menu.bat — Freeze/Unfreeze PC
+  - Password: teacher
+
+  Auto-activate:
+  - Windows จะ activate อัตโนมัติหลัง install + connect internet
+  - ถ้าไม่ได้ auto: เปิด CMD (Admin) พิมพ์:
+    slmgr /skms kms8.msguides.com
+    slmgr /ato
+
+============================================================
+แก้ปัญหา
+============================================================
+
+ถาม: เครื่อง activate ไม่ได้?
+ตอบ: ต้องต่อ internet ก่อน แล้วรัน activate ใน CMD (Admin)
+
+ถาม: Office ไม่มี license?
+ตอบ: ใช้งานได้ปกติ (trial/grace period)
+     ถ้าต้องการ activate ใช้ KMS tool
+
+ถาม: เครื่องช้าหลังใช้ไปนาน?
+ตอบ: Freeze PC แล้ว restart = กลับเดิม
+
+ถาม: อยากลงโปรแกรมเพิ่ม?
+ตอบ: Unfreeze > ลงโปรแกรม > Freeze กลับ
+
+ถาม: ลืม password teacher?
+ตอบ: password คือ "teacher" (ตัวพิมพ์เล็ก)
+
+============================================================
+  ChumChim School PC Image
+  github.com/chumchim/chumchim-clonezilla
+============================================================
