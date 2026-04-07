@@ -34,6 +34,13 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+echo [0/3] Checking for pending reboots...
+powershell -Command "if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { Write-Host '  REBOOT REQUIRED! Restarting in 10 seconds...'; shutdown /r /t 10 /f; exit } elseif (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { Write-Host '  REBOOT REQUIRED! Restarting in 10 seconds...'; shutdown /r /t 10 /f; exit } else { Write-Host '  No pending reboot - OK' }"
+
+:: Clear pending file operations
+powershell -Command "Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name 'PendingFileRenameOperations' -Force -ErrorAction SilentlyContinue"
+
+echo.
 echo [1/3] Preparing Sysprep...
 
 :: Remove AppX packages that commonly block Sysprep (targeted, safe)
@@ -54,9 +61,9 @@ reg add "HKLM\SYSTEM\Setup\Sysprep\Settings\Microsoft-Windows-AppxSysprep" /v Cl
 takeown /f "%SystemRoot%\System32\Sysprep\ActionFiles\Generalize.xml" >nul 2>&1
 icacls "%SystemRoot%\System32\Sysprep\ActionFiles\Generalize.xml" /grant Administrators:F >nul 2>&1
 
-:: Remove AppxSysprep from Generalize.xml (main fix!)
+:: Remove AppxSysprep from Generalize.xml (line-by-line method)
 echo   Removing AppxSysprep from Generalize.xml...
-powershell -Command "$x = Get-Content 'C:\Windows\System32\Sysprep\ActionFiles\Generalize.xml' -Raw; $x = $x -replace '(?s)<imaging[^>]*>.*?AppX-Sysprep.*?</imaging>', ''; Set-Content 'C:\Windows\System32\Sysprep\ActionFiles\Generalize.xml' $x -Force"
+powershell -ExecutionPolicy Bypass -File "%~dp0fix-appx.ps1"
 
 echo   Done!
 

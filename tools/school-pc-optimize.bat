@@ -113,9 +113,7 @@ defrag C: /O /U >nul 2>&1
 echo   Done!
 
 echo ====== [9/10] Shrink partition ======
-echo $d=Get-PSDrive C;$u=[math]::Round($d.Used/1GB);$f=[math]::Round($d.Free/1GB);$t=$u+$f;$g=[math]::Round($u*1.3);$s=[math]::Round(($t-$g)*1024);Write-Host "  Current: ${t}GB (Used: ${u}GB, Free: ${f}GB)";Write-Host "  Target: ${g}GB";if($s -gt 1024){Write-Host "  Shrinking ${s}MB...";$sz=(Get-Partition -DriveLetter C).Size-($s*1MB);Resize-Partition -DriveLetter C -Size $sz -ErrorAction SilentlyContinue;Write-Host "  Done!"}else{Write-Host "  Already small enough"} > "%TEMP%\shrink.ps1"
-powershell -ExecutionPolicy Bypass -File "%TEMP%\shrink.ps1" 2>nul
-del "%TEMP%\shrink.ps1" 2>nul
+powershell -ExecutionPolicy Bypass -File "%~dp0shrink-partition.ps1" 2>nul
 echo   Done!
 
 echo ====== [10/10] Zero-fill ======
