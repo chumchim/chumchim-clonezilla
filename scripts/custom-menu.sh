@@ -341,7 +341,7 @@ do_install() {
     # Try LAN NFS first
     INSTALL_VIA_LAN=0
     if type lan_try_nfs_for_install >/dev/null 2>&1; then
-        dialog --infobox "\n  Scanning LAN for server..." 5 40
+        dialog --infobox "\n  Scanning LAN for server...\n  (waiting up to 10 seconds)" 6 45
         if lan_try_nfs_for_install; then
             INSTALL_VIA_LAN=1
         fi
