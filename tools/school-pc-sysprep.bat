@@ -54,6 +54,10 @@ reg add "HKLM\SYSTEM\Setup\Sysprep\Settings\Microsoft-Windows-AppxSysprep" /v Cl
 takeown /f "%SystemRoot%\System32\Sysprep\ActionFiles\Generalize.xml" >nul 2>&1
 icacls "%SystemRoot%\System32\Sysprep\ActionFiles\Generalize.xml" /grant Administrators:F >nul 2>&1
 
+:: Remove AppxSysprep from Generalize.xml (main fix!)
+echo   Removing AppxSysprep from Generalize.xml...
+powershell -Command "$x = Get-Content 'C:\Windows\System32\Sysprep\ActionFiles\Generalize.xml' -Raw; $x = $x -replace '(?s)<imaging[^>]*>.*?AppX-Sysprep.*?</imaging>', ''; Set-Content 'C:\Windows\System32\Sysprep\ActionFiles\Generalize.xml' $x -Force"
+
 echo   Done!
 
 echo [2/3] Creating unattend.xml...
