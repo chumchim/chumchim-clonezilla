@@ -210,7 +210,19 @@ pxe_setup_tftp() {
         grub-mkimage -O x86_64-efi -o "$PXE_TFTP_ROOT/efi64/bootx64.efi" \
             -p "(tftp)/" \
             efinet tftp linux normal configfile 2>/dev/null
-        lan_log "UEFI PXE files ready"
+        # Ensure bootx64.efi exists at all required paths
+        if [ ! -f "$PXE_TFTP_ROOT/efi64/bootx64.efi" ]; then
+            local core=""
+            for f in "$PXE_TFTP_ROOT/efi64/boot/grub/x86_64-efi/core.efi" "$PXE_TFTP_ROOT/efi64/x86_64-efi/core.efi"; do
+                [ -f "$f" ] && { core="$f"; break; }
+            done
+            [ -n "$core" ] && cp "$core" "$PXE_TFTP_ROOT/efi64/bootx64.efi"
+        fi
+        # Copy to TFTP root + EFI/BOOT (different firmware look in different places)
+        cp "$PXE_TFTP_ROOT/efi64/bootx64.efi" "$PXE_TFTP_ROOT/bootx64.efi" 2>/dev/null
+        mkdir -p "$PXE_TFTP_ROOT/EFI/BOOT"
+        cp "$PXE_TFTP_ROOT/efi64/bootx64.efi" "$PXE_TFTP_ROOT/EFI/BOOT/bootx64.efi" 2>/dev/null
+        lan_log "UEFI PXE files ready (bootx64.efi at root + EFI/BOOT)"
     else
         lan_log "WARNING: grub x86_64-efi modules not found — UEFI PXE disabled"
     fi
@@ -246,8 +258,8 @@ PROMPT 0
 TIMEOUT 30
 LABEL chumchim
   MENU LABEL ChumChim-Clonezilla (PXE)
-  KERNEL tftp://${LAN_IP}/vmlinuz
-  APPEND initrd=tftp://${LAN_IP}/initrd.img boot=live netboot=nfs nfsroot=${LAN_IP}:${PXE_NFS_LIVE} union=overlay username=user locales=en_US.UTF-8 keyboard-layouts=us chumchim_server=${LAN_IP} chumchim_pxe=1
+  KERNEL vmlinuz
+  APPEND initrd=initrd.img boot=live netboot=nfs nfsroot=${LAN_IP}:${PXE_NFS_LIVE} union=overlay username=user locales=en_US.UTF-8 keyboard-layouts=us chumchim_server=${LAN_IP} chumchim_pxe=1
 PXECFG
 
     # --- UEFI grub config ---
@@ -255,10 +267,16 @@ PXECFG
 set default=0
 set timeout=3
 menuentry "ChumChim-Clonezilla (PXE)" {
-  linux tftp://${LAN_IP}/vmlinuz boot=live netboot=nfs nfsroot=${LAN_IP}:${PXE_NFS_LIVE} union=overlay username=user locales=en_US.UTF-8 keyboard-layouts=us chumchim_server=${LAN_IP} chumchim_pxe=1
-  initrd tftp://${LAN_IP}/initrd.img
+  linux /vmlinuz boot=live netboot=nfs nfsroot=${LAN_IP}:${PXE_NFS_LIVE} union=overlay username=user locales=en_US.UTF-8 keyboard-layouts=us chumchim_server=${LAN_IP} chumchim_pxe=1
+  initrd /initrd.img
 }
 GRUBCFG
+
+    # Copy grub.cfg to all locations GRUB may look for
+    cp "$PXE_TFTP_ROOT/efi64/grub.cfg" "$PXE_TFTP_ROOT/grub.cfg" 2>/dev/null
+    cp "$PXE_TFTP_ROOT/efi64/grub.cfg" "$PXE_TFTP_ROOT/boot/grub/grub.cfg" 2>/dev/null
+    mkdir -p "$PXE_TFTP_ROOT/EFI/BOOT"
+    cp "$PXE_TFTP_ROOT/efi64/grub.cfg" "$PXE_TFTP_ROOT/EFI/BOOT/grub.cfg" 2>/dev/null
 
     lan_log "TFTP boot configs written (server=$LAN_IP)"
     return 0
@@ -352,6 +370,7 @@ interface=${LAN_IF}
 bind-interfaces
 dhcp-range=${LAN_IP},proxy
 dhcp-no-override
+dhcp-option=66,${LAN_IP}
 DNSMASQCFG
     else
         lan_log "No DHCP detected — running full DHCP + PXE"
@@ -361,6 +380,7 @@ interface=${LAN_IF}
 bind-interfaces
 dhcp-range=${subnet}.100,${subnet}.200,255.255.255.0,1h
 dhcp-option=option:router,${LAN_IP}
+dhcp-option=66,${LAN_IP}
 DNSMASQCFG
     fi
 
@@ -384,7 +404,6 @@ pxe-service=x86-64_EFI,"ChumChim PXE",${uefi_file},${LAN_IP}
 # TFTP server
 enable-tftp
 tftp-root=${PXE_TFTP_ROOT}
-tftp-no-blocksize
 
 # Logging
 log-dhcp
