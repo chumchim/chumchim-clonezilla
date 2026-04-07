@@ -56,7 +56,9 @@ get_src_used_mb() {
 
 # Shutdown with fallbacks
 do_shutdown() {
-    do_shutdown
+    dialog --yesno "Shutdown computer?" 6 30 || return
+    sync
+    shutdown -h now 2>/dev/null || poweroff 2>/dev/null || halt 2>/dev/null || echo o > /proc/sysrq-trigger
 }
 
 # ============================================
@@ -146,30 +148,36 @@ select_partition() {
 # ============================================
 select_image() {
     SEL_IMG_NAME=""; SEL_IMG_DEV=""
-    local -a IMG_DEVS=()
-    local -a IMG_NAMES=()
     OPTS=""; IMG_COUNT=0
+    # Use temp file to map index to device+name
+    IMG_MAP_FILE="/tmp/_img_map"
+    > "$IMG_MAP_FILE"
     for dev in /dev/sd*[0-9]* /dev/nvme*p[0-9]*; do
+        [ -b "$dev" ] || continue
         mkdir -p /tmp/_sel 2>/dev/null
-        mount $dev /tmp/_sel 2>/dev/null || continue
+        mount "$dev" /tmp/_sel 2>/dev/null || continue
         for dir in /tmp/_sel/*/; do
+            [ -d "$dir" ] || continue
             if [ -f "${dir}disk" ] 2>/dev/null || [ -f "${dir}parts" ] 2>/dev/null; then
                 IMG_COUNT=$((IMG_COUNT + 1))
                 NAME=$(basename "$dir")
                 SIZE=$(du -sh "$dir" 2>/dev/null | cut -f1)
                 NOTE=""; [ -f "/tmp/_sel/.note_${NAME}" ] && NOTE=" - $(cat "/tmp/_sel/.note_${NAME}")"
                 OPTS="$OPTS $IMG_COUNT \"$NAME ($SIZE)$NOTE\""
-                IMG_DEVS[$IMG_COUNT]="$dev"
-                IMG_NAMES[$IMG_COUNT]="$NAME"
+                echo "${dev}|${NAME}" >> "$IMG_MAP_FILE"
             fi
         done
         umount /tmp/_sel 2>/dev/null
     done
-    [ $IMG_COUNT -eq 0 ] && { dialog --msgbox "No images found!\n\nClone a PC first." 8 40; return 1; }
+    [ $IMG_COUNT -eq 0 ] && { dialog --msgbox "No images found!\n\nClone a PC first." 8 40; rm -f "$IMG_MAP_FILE"; return 1; }
     RESULT=$(eval "dialog --title \"Select Image\" --menu \"\" 15 70 6 $OPTS" 3>&1 1>&2 2>&3)
-    [ $? -ne 0 ] && return 1
-    SEL_IMG_DEV="${IMG_DEVS[$RESULT]}"
-    SEL_IMG_NAME="${IMG_NAMES[$RESULT]}"
+    [ $? -ne 0 ] && { rm -f "$IMG_MAP_FILE"; return 1; }
+    # Read from map file
+    MAP_LINE=$(sed -n "${RESULT}p" "$IMG_MAP_FILE")
+    SEL_IMG_DEV=$(echo "$MAP_LINE" | cut -d'|' -f1)
+    SEL_IMG_NAME=$(echo "$MAP_LINE" | cut -d'|' -f2)
+    rm -f "$IMG_MAP_FILE"
+    [ -z "$SEL_IMG_NAME" ] && return 1
     return 0
 }
 
@@ -207,11 +215,38 @@ clone_auto_detect() {
     [ -z "$SRC" ] && { dialog --msgbox "No source disk found!" 8 40; return 1; }
 
     # Auto-detect save: Priority order:
-    # 1. USB/removable with enough space -> best (portable)
-    # 2. Other internal disk with enough space -> fallback
+    # 1. USB boot writable partition (just created if needed) -> best
+    # 2. USB/removable with enough space -> portable
+    # 3. Other internal disk with enough space -> fallback
     SAVE_DEV=""
     BEST_USB_DEV=""; BEST_USB_FREE=0
     BEST_INT_DEV=""; BEST_INT_FREE=0
+    BOOT_USB_PART=""
+
+    # Re-scan boot USB for new writable partition
+    if [ -n "$BOOT_USB" ]; then
+        USB_NAME=$(echo "$BOOT_USB" | sed 's|/dev/||')
+        for pname in $(lsblk -l -o NAME "$BOOT_USB" 2>/dev/null | tail -n +2 | grep -v "^${USB_NAME}$"); do
+            FS=$(blkid -o value -s TYPE "/dev/$pname" 2>/dev/null)
+            if [ "$FS" != "iso9660" ] && [ "$FS" != "squashfs" ] && [ -n "$FS" ]; then
+                mkdir -p /tmp/_autocheck
+                mount "/dev/$pname" /tmp/_autocheck 2>/dev/null
+                if [ $? -eq 0 ]; then
+                    touch /tmp/_autocheck/.writetest 2>/dev/null
+                    if [ $? -eq 0 ]; then
+                        rm -f /tmp/_autocheck/.writetest
+                        FREE_MB=$(df -m /tmp/_autocheck 2>/dev/null | tail -1 | awk '{print $4}')
+                        [ -z "$FREE_MB" ] && FREE_MB=0
+                        if [ "$FREE_MB" -gt "$BEST_USB_FREE" ]; then
+                            BEST_USB_FREE=$FREE_MB
+                            BOOT_USB_PART="/dev/$pname"
+                        fi
+                    fi
+                    umount /tmp/_autocheck 2>/dev/null
+                fi
+            fi
+        done
+    fi
 
     for dname in $(lsblk -d -o NAME,TYPE | grep "disk" | awk '{print $1}'); do
         [ "$dname" = "$SRC" ] && continue
@@ -247,8 +282,11 @@ clone_auto_detect() {
         done
     done
 
-    # Choose: prefer USB if it has enough space, else use internal
-    if [ -n "$BEST_USB_DEV" ] && [ "$BEST_USB_FREE" -gt 0 ]; then
+    # Choose: prefer boot USB writable partition, then other USB, then internal
+    if [ -n "$BOOT_USB_PART" ] && [ "$BEST_USB_FREE" -gt 0 ]; then
+        SAVE_DEV="$BOOT_USB_PART"
+        SAVE_FREE_DETECTED=$BEST_USB_FREE
+    elif [ -n "$BEST_USB_DEV" ] && [ "$BEST_USB_FREE" -gt 0 ]; then
         SAVE_DEV="$BEST_USB_DEV"
         SAVE_FREE_DETECTED=$BEST_USB_FREE
     elif [ -n "$BEST_INT_DEV" ] && [ "$BEST_INT_FREE" -gt 0 ]; then
@@ -268,7 +306,8 @@ clone_auto_detect() {
 
     # Auto image name
     SRC_SIZE=$(lsblk -d -o SIZE /dev/$SRC 2>/dev/null | tail -1 | tr -d ' ')
-    DEFAULT_NAME="Clone-$(date +%d%b)-${SRC_SIZE}"
+    SRC_MODEL=$(lsblk -d -o MODEL /dev/$SRC 2>/dev/null | tail -1 | tr -d ' ')
+    DEFAULT_NAME="Clone-$(date +%d%b)-${SRC}"
 
     # Single screen: name + note
     IMG_NAME=$(dialog --title "Image Name" --inputbox \
@@ -301,9 +340,9 @@ clone_auto_detect() {
 
     # If USB doesn't have enough space, auto-switch to internal disk
     if [ "$SAVE_FREE_MB" -gt 0 ] && [ "$SRC_USED_MB" -gt 0 ]; then
-        if [ "$SAVE_FREE_MB" -lt "$((SRC_USED_MB / 4))" ]; then
+        if [ "$SAVE_FREE_MB" -lt "$EST_IMAGE_MB" ]; then
             # Current save is too small — try internal disk
-            if [ -n "$BEST_INT_DEV" ] && [ "$BEST_INT_FREE" -gt "$((SRC_USED_MB / 4))" ]; then
+            if [ -n "$BEST_INT_DEV" ] && [ "$BEST_INT_FREE" -gt "$EST_IMAGE_MB" ]; then
                 umount /home/partimag 2>/dev/null
                 SAVE_DEV="$BEST_INT_DEV"
                 mount $SAVE_DEV /home/partimag 2>/dev/null || { dialog --msgbox "Cannot mount $SAVE_DEV" 6 40; return 1; }
@@ -379,7 +418,7 @@ clone_manual_select() {
     EST_IMAGE_GB=$((SRC_USED_MB * 40 / 100 / 1024))
 
     if [ "$SAVE_FREE_MB" -gt 0 ] && [ "$SRC_USED_MB" -gt 0 ]; then
-        if [ "$SAVE_FREE_MB" -lt "$((SRC_USED_MB / 4))" ]; then
+        if [ "$SAVE_FREE_MB" -lt "$EST_IMAGE_MB" ]; then
             dialog --yesno "WARNING: Low disk space!\n\nSource used:     ~${SRC_USED_GB} GB\nEstimated image: ~${EST_IMAGE_GB} GB\nSave free:       ~${SAVE_FREE_GB} GB\n\nContinue anyway?" 14 55
             [ $? -ne 0 ] && { umount /home/partimag 2>/dev/null; return 1; }
         fi
@@ -455,7 +494,7 @@ do_clone() {
     echo ""
     log "Clone /dev/$SRC -> $IMG_NAME ($PART_COUNT partitions)"
 
-    /usr/sbin/ocs-sr -q2 -batch -nogui -j2 $COMPRESS -i 67108864 -sfsck -senc -p true savedisk "$IMG_NAME" "$SRC" 2>&1 | tee -a "$LOG_FILE"
+    /usr/sbin/ocs-sr -q2 -j2 -nogui -sc $COMPRESS -sfsck -senc -p true savedisk "$IMG_NAME" "$SRC" 2>&1 | tee -a "$LOG_FILE"
     OCS_RC=${PIPESTATUS[0]}
 
     if [ $OCS_RC -eq 0 ]; then
@@ -586,7 +625,7 @@ do_install() {
     echo ""
     log "Install $IMG_NAME -> /dev/$TGT ($PART_COUNT partitions)"
 
-    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -batch -nogui -j2 -p true restoredisk "$IMG_NAME" "$TGT" 2>&1 | tee -a "$LOG_FILE"
+    /usr/sbin/ocs-sr -g auto -e1 auto -e2 -r -nogui -j2 -sc -p true restoredisk "$IMG_NAME" "$TGT" 2>&1 | tee -a "$LOG_FILE"
     OCS_RC=${PIPESTATUS[0]}
 
     if [ $OCS_RC -eq 0 ]; then
@@ -644,7 +683,15 @@ do_manage() {
 
                 # Mount source
                 mkdir -p /tmp/_csrc
-                mount $SRC_IMG_DEV /tmp/_csrc 2>/dev/null || { dialog --msgbox "Cannot mount source" 6 40; continue; }
+                mount "$SRC_IMG_DEV" /tmp/_csrc 2>/dev/null || { dialog --msgbox "Cannot mount source\n$SRC_IMG_DEV" 8 45; continue; }
+                
+                # Verify image exists
+                if [ ! -d "/tmp/_csrc/$SRC_IMG_NAME" ]; then
+                    dialog --msgbox "Image not found:\n$SRC_IMG_NAME" 8 45
+                    umount /tmp/_csrc 2>/dev/null
+                    continue
+                fi
+                
                 IMG_SIZE=$(du -sh "/tmp/_csrc/$SRC_IMG_NAME" 2>/dev/null | cut -f1)
 
                 # Select destination disk
@@ -653,16 +700,16 @@ do_manage() {
                 select_partition "$DST_DISK" || { umount /tmp/_csrc 2>/dev/null; continue; }
                 DST_DEV="/dev/$SEL_PART"
 
-                # Prevent copy to same partition
+                # Prevent copy to same partition (not same disk, same PARTITION)
                 if [ "$DST_DEV" = "$SRC_IMG_DEV" ]; then
-                    dialog --msgbox "Cannot copy to the same disk!\nChoose a different disk." 8 45
+                    dialog --msgbox "Cannot copy to the same partition!\nChoose a different partition or disk." 8 50
                     umount /tmp/_csrc 2>/dev/null
                     continue
                 fi
 
                 # Mount destination
                 mkdir -p /tmp/_cdst
-                mount $DST_DEV /tmp/_cdst 2>/dev/null || { dialog --msgbox "Cannot mount $DST_DEV\nTry NTFS or ext4 formatted disk." 8 45; umount /tmp/_csrc 2>/dev/null; continue; }
+                mount "$DST_DEV" /tmp/_cdst 2>/dev/null || { dialog --msgbox "Cannot mount $DST_DEV\nTry NTFS or ext4 formatted disk." 8 45; umount /tmp/_csrc 2>/dev/null; continue; }
 
                 # Check free space
                 DST_FREE=$(df -h /tmp/_cdst 2>/dev/null | tail -1 | awk '{print $4}')
@@ -688,6 +735,7 @@ do_manage() {
 
                 # Check if exists on destination
                 if [ -d "/tmp/_cdst/$SRC_IMG_NAME" ]; then
+                    dialog --yesno "Image already exists on destination!\nOverwrite?" 8 40 || { umount /tmp/_cdst 2>/dev/null; umount /tmp/_csrc 2>/dev/null; continue; }
                     rm -rf "/tmp/_cdst/$SRC_IMG_NAME"
                 fi
 
@@ -767,9 +815,165 @@ show_splash() {
 }
 
 # ============================================
+# Setup writable partition on boot USB (for DD mode)
+# ============================================
+setup_usb_storage() {
+    [ -z "$BOOT_USB" ] && return 1
+
+    log "Checking boot USB for writable partition: $BOOT_USB"
+
+    # Check if USB already has a writable partition
+    USB_NAME=$(echo "$BOOT_USB" | sed 's|/dev/||')
+    for pname in $(lsblk -l -o NAME "$BOOT_USB" 2>/dev/null | tail -n +2 | grep -v "^${USB_NAME}$"); do
+        FS=$(blkid -o value -s TYPE "/dev/$pname" 2>/dev/null)
+        if [ "$FS" != "iso9660" ] && [ "$FS" != "squashfs" ] && [ -n "$FS" ]; then
+            # Check if writable
+            mkdir -p /tmp/_usbcheck 2>/dev/null
+            mount "/dev/$pname" /tmp/_usbcheck 2>/dev/null
+            if [ $? -eq 0 ]; then
+                touch /tmp/_usbcheck/.writetest 2>/dev/null
+                if [ $? -eq 0 ]; then
+                    rm -f /tmp/_usbcheck/.writetest
+                    umount /tmp/_usbcheck 2>/dev/null
+                    log "USB already has writable partition: /dev/$pname ($FS)"
+                    return 0
+                fi
+                umount /tmp/_usbcheck 2>/dev/null
+            fi
+        fi
+    done
+
+    # No writable partition found — create one from unallocated space
+    log "No writable partition on boot USB, creating one..."
+
+    # Get disk size in sectors
+    DISK_SECTORS=$(blockdev --getsz "$BOOT_USB" 2>/dev/null)
+    [ -z "$DISK_SECTORS" ] && { log "Cannot get disk size"; return 1; }
+
+    # Find partition table type
+    PT_TYPE=$(fdisk -l "$BOOT_USB" 2>/dev/null | grep -i "label type" | awk '{print $NF}' | head -1)
+    [ -z "$PT_TYPE" ] && PT_TYPE="dos"
+
+    log "Partition table: $PT_TYPE"
+
+    # Find the last used sector from existing partitions
+    LAST_SECTOR=0
+    for pname in $(lsblk -l -o NAME "$BOOT_USB" 2>/dev/null | tail -n +2 | grep -v "^${USB_NAME}$"); do
+        P_END=$(sfdisk -l "$BOOT_USB" 2>/dev/null | grep "^/dev/$pname" | awk '{print $4}' | head -1)
+        [ -z "$P_END" ] && P_END=$(fdisk -l "$BOOT_USB" 2>/dev/null | grep "^/dev/$pname" | awk '{print $3}' | head -1)
+        if [ -n "$P_END" ] && [ "$P_END" -gt "$LAST_SECTOR" ] 2>/dev/null; then
+            LAST_SECTOR=$P_END
+        fi
+    done
+
+    # If we still can't determine, use a reasonable default
+    if [ "$LAST_SECTOR" = "0" ]; then
+        # Assume first partition ends around 1GB (typical for ISO)
+        LAST_SECTOR=2097152  # 1GB in 512-byte sectors
+        log "Could not determine last sector, assuming $LAST_SECTOR"
+    fi
+
+    # Calculate free space
+    FREE_SECTORS=$((DISK_SECTORS - LAST_SECTOR - 1))
+    FREE_MB=$((FREE_SECTORS * 512 / 1048576))
+
+    if [ "$FREE_MB" -lt 100 ]; then
+        log "Not enough free space on USB: ${FREE_MB}MB"
+        return 1
+    fi
+
+    log "Free space on USB: ${FREE_MB}MB — creating partition..."
+
+    # Determine new partition number
+    PART_NUM=$(lsblk -l -o NAME "$BOOT_USB" 2>/dev/null | tail -n +2 | grep -v "^${USB_NAME}$" | wc -l)
+    PART_NUM=$((PART_NUM + 1))
+
+    # Determine partition name format
+    if echo "$USB_NAME" | grep -q "nvme"; then
+        NEW_PART="${BOOT_USB}p${PART_NUM}"
+    else
+        NEW_PART="${BOOT_USB}${PART_NUM}"
+    fi
+
+    # Start sector (align to 1MB boundary)
+    START_SECTOR=$(( (LAST_SECTOR / 2048 + 1) * 2048 ))
+    if [ "$START_SECTOR" -le "$LAST_SECTOR" ]; then
+        START_SECTOR=$((LAST_SECTOR + 1))
+    fi
+
+    log "Creating partition ${PART_NUM}: start=${START_SECTOR}, end=${DISK_SECTORS}"
+
+    # Create partition using sfdisk (append mode)
+    echo "${START_SECTOR},,7" | sfdisk --no-reread -N "$PART_NUM" "$BOOT_USB" 2>/dev/null
+    SFDISK_RC=$?
+
+    if [ $SFDISK_RC -ne 0 ]; then
+        log "sfdisk failed (rc=$SFDISK_RC), trying fdisk..."
+        # Alternative: use fdisk
+        (
+            echo "n"
+            echo "p"
+            echo "$PART_NUM"
+            echo ""
+            echo ""
+            echo "t"
+            echo "$PART_NUM"
+            echo "7"
+            echo "w"
+        ) | fdisk "$BOOT_USB" 2>/dev/null
+    fi
+
+    # Re-read partition table
+    partprobe "$BOOT_USB" 2>/dev/null || true
+    blockdev --rereadpt "$BOOT_USB" 2>/dev/null || true
+    sleep 3
+
+    # Check if partition was created
+    if [ ! -b "$NEW_PART" ]; then
+        # Try to find it
+        for p in "${BOOT_USB}"[0-9]* "${BOOT_USB}"p[0-9]*; do
+            [ -b "$p" ] && { NEW_PART="$p"; break; }
+        done
+    fi
+
+    if [ ! -b "$NEW_PART" ]; then
+        log "Partition not found after creation"
+        # Last resort: use whole disk with overlay
+        log "Falling back to overlayfs on USB..."
+        return 1
+    fi
+
+    # Format as NTFS (compatible with Windows)
+    log "Formatting $NEW_PART as NTFS..."
+    mkfs.ntfs -f -L "ChumChim-Data" "$NEW_PART" 2>/dev/null
+    FMT_RC=$?
+
+    if [ $FMT_RC -ne 0 ]; then
+        log "NTFS failed (rc=$FMT_RC), trying FAT32..."
+        mkfs.vfat -F 32 -n "ChumChim-Data" "$NEW_PART" 2>/dev/null
+        FMT_RC=$?
+    fi
+
+    if [ $FMT_RC -ne 0 ]; then
+        log "FAT32 failed, trying ext4..."
+        mkfs.ext4 -F -L "ChumChim-Data" "$NEW_PART" 2>/dev/null
+        FMT_RC=$?
+    fi
+
+    if [ $FMT_RC -eq 0 ]; then
+        log "USB storage partition created and formatted: $NEW_PART"
+        return 0
+    else
+        log "Failed to format $NEW_PART"
+        return 1
+    fi
+}
+
+# ============================================
 # MAIN
 # ============================================
 find_boot_usb
+setup_usb_storage 2>/dev/null || true
 show_splash
 
 while true; do
