@@ -1,8 +1,9 @@
 # Temp scripts (one-off tools)
 *.ps1
-*.bat
 fix-disk2.*
 do-copy.*
+# Ignore root .bat files but keep tools/
+/*.bat
 
 # Build artifacts
 *.iso
