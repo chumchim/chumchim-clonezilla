@@ -1,0 +1,9 @@
+# Temp scripts (one-off tools)
+*.ps1
+*.bat
+fix-disk2.*
+do-copy.*
+
+# Build artifacts
+*.iso
+*.vhdx
