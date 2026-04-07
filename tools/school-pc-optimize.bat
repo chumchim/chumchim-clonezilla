@@ -274,9 +274,8 @@ echo    [Phase 6] Defragmented + partition shrunk
 echo    [Phase 7] Free space zero-filled
 echo.
 echo  Next steps:
-echo    1. Restart this PC
-echo    2. (Optional) Run school-pc-sysprep.bat
-echo    3. Boot from ChumChim USB
-echo    4. Clone this PC
+echo    1. (Optional) Run school-pc-sysprep.bat
+echo       (Sysprep will shutdown PC automatically)
+echo    2. Or shutdown manually then boot USB to Clone
 echo.
 pause
