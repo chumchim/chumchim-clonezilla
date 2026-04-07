@@ -137,10 +137,14 @@ done
 # If no DHCP, assign static
 HAS_IP=$(ip -4 addr show | grep "inet " | grep -v "127.0.0.1" | head -1)
 if [ -z "$HAS_IP" ]; then
-    # Random IP to avoid collision between VMs
-    RANDOM_OCTET=$(( ($(date +%N) % 200) + 10 ))
+    # Assign IP based on last 2 bytes of MAC (unique per VM)
+    IFACE=$(ls /sys/class/net/ 2>/dev/null | grep -v lo | head -1)
+    MAC_LAST=$(cat /sys/class/net/$IFACE/address 2>/dev/null | awk -F: '{print $6}')
+    OCTET=$((16#${MAC_LAST:-50}))
+    [ "$OCTET" -lt 2 ] && OCTET=$((OCTET + 100))
+    [ "$OCTET" -gt 253 ] && OCTET=$((OCTET - 100))
     for iface in $(ls /sys/class/net/ 2>/dev/null | grep -v lo); do
-        ip addr add 192.168.77.${RANDOM_OCTET}/24 dev "$iface" 2>/dev/null
+        ip addr add 192.168.77.${OCTET}/24 dev "$iface" 2>/dev/null
         break
     done
 fi
