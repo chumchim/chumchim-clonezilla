@@ -160,9 +160,12 @@ LABEL ChumChim-text
 EOF
 cp $WORK/iso/syslinux/syslinux.cfg $WORK/iso/syslinux/isolinux.cfg
 
-echo "[5/6] Adding docs to ISO root..."
+echo "[5/6] Adding docs + tools to ISO root..."
 DOCS=/mnt/c/Users/phanu/source/repos/chumchim-clonezilla/docs
+TOOLS=/mnt/c/Users/phanu/source/repos/chumchim-clonezilla/tools
 cp $DOCS/*.txt $WORK/iso/ 2>/dev/null || true
+mkdir -p $WORK/iso/tools
+cp $TOOLS/*.bat $WORK/iso/tools/ 2>/dev/null || true
 echo "  OK"
 
 echo "[6/6] Repacking ISO..."
