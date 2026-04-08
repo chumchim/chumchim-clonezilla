@@ -480,17 +480,29 @@ do_lan_server() {
         fi
     done
 
-    # Second: try NTFS with ntfs-3g (read-write)
+    # Second: find LARGEST NTFS partition and mount with ntfs-3g
     if [ "$mounted" = "0" ]; then
+        local best_ntfs=""
+        local best_ntfs_size=0
         for pname in $(lsblk -l -o NAME "/dev/$LAN_DISK" 2>/dev/null | tail -n +2 | grep -v "^${LAN_DISK}$"); do
             local fs=$(blkid -o value -s TYPE "/dev/$pname" 2>/dev/null)
             if [ "$fs" = "ntfs" ]; then
-                # Try ntfs-3g for read-write NTFS
-                ntfs-3g "/dev/$pname" "$LAN_NFS_PATH" -o rw,big_writes,allow_other 2>/dev/null && { mounted=1; echo "         Mounted NTFS /dev/$pname (ntfs-3g rw)"; break; }
-                # Fallback: regular mount
-                mount -t ntfs-3g "/dev/$pname" "$LAN_NFS_PATH" -o rw,big_writes,allow_other 2>/dev/null && { mounted=1; echo "         Mounted NTFS /dev/$pname (rw)"; break; }
+                local psz=$(blockdev --getsize64 "/dev/$pname" 2>/dev/null)
+                [ -z "$psz" ] && continue
+                if [ "$psz" -gt "$best_ntfs_size" ]; then
+                    best_ntfs_size=$psz
+                    best_ntfs="$pname"
+                fi
             fi
         done
+        if [ -n "$best_ntfs" ]; then
+            local szgb=$((best_ntfs_size / 1073741824))
+            echo "         Found NTFS /dev/$best_ntfs (${szgb}GB)"
+            ntfs-3g "/dev/$best_ntfs" "$LAN_NFS_PATH" -o rw,big_writes,allow_other 2>/dev/null && { mounted=1; echo "         Mounted NTFS /dev/$best_ntfs (ntfs-3g rw)"; }
+            if [ "$mounted" = "0" ]; then
+                mount -t ntfs-3g "/dev/$best_ntfs" "$LAN_NFS_PATH" -o rw,big_writes,allow_other 2>/dev/null && { mounted=1; echo "         Mounted NTFS /dev/$best_ntfs (rw)"; }
+            fi
+        fi
     fi
 
     # Third: format biggest partition as ext4
